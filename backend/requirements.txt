@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+python-multipart
+faster-whisper
+scenedetect
+moviepy
+mediapipe
+llama-cpp-python
+requests
+opencv-python
