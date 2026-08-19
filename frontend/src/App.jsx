@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { UploadCloud, Video, Scissors, RefreshCw, Download, CheckCircle, Loader } from 'lucide-react';
 import axios from 'axios';
 
-const API_URL = 'http://localhost:8000/api';
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const BACKEND_URL = API_URL.replace(/\/api$/, '');
 
 function App() {
   const [file, setFile] = useState(null);
@@ -144,13 +145,13 @@ function App() {
                     >
                       <div className="aspect-[9/16] bg-black flex items-center justify-center relative group overflow-hidden">
                         <video 
-                          src={`http://localhost:8000/${clip}`} 
+                          src={`${BACKEND_URL}/${clip}`} 
                           className="w-full h-full object-cover"
                           controls
                           loop
                         />
                         <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <a href={`http://localhost:8000/${clip}`} download className="bg-slate-800/80 p-2 rounded-full hover:bg-slate-700 transition-colors block border border-slate-600">
+                          <a href={`${BACKEND_URL}/${clip}`} download className="bg-slate-800/80 p-2 rounded-full hover:bg-slate-700 transition-colors block border border-slate-600">
                             <Download className="w-5 h-5 text-white" />
                           </a>
                         </div>
