@@ -8,13 +8,22 @@ MODEL_PATH = "models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
 
 llm = None
 
+import requests
 def download_model_if_needed():
     if not os.path.exists("models"):
         os.makedirs("models")
         
+    if os.path.exists(MODEL_PATH) and os.path.getsize(MODEL_PATH) < 100000000:
+        print("Model file is corrupted or incomplete. Deleting and redownloading...")
+        os.remove(MODEL_PATH)
+
     if not os.path.exists(MODEL_PATH):
         print("Downloading TinyLlama model for CPU inference. This may take a few minutes...")
-        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+        response = requests.get(MODEL_URL, stream=True)
+        response.raise_for_status()
+        with open(MODEL_PATH, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
         print("Model downloaded successfully!")
 
 def get_llm():
@@ -33,25 +42,46 @@ def score_chunks(transcript_text: str):
     llm_instance = get_llm()
     
     prompt = f"""<|system|>
-You are an expert video editor. I will give you a transcript.
-Find 1-3 highly engaging segments (hooks) that make great 15-60 second TikToks.
-Respond ONLY with a valid JSON array of objects, where each object has:
-- "title": a catchy title for the clip
-- "start_text": the first few words of the clip
-- "end_text": the last few words of the clip
-
-Return ONLY the JSON array, no other text.
+You are an AI video editor. Find EXACTLY 3 highly engaging segments (hooks) in the transcript for TikToks.
+Ensure the 3 clips are from completely different, distinct parts of the video.
+Each clip MUST be approximately 60 seconds long (about 120-150 words).
+Respond ONLY with a valid JSON array containing exactly 3 objects. Do not add any conversational text.
+Example format:
+[
+  {{
+    "title": "The Crazy Secret",
+    "start_text": "This is exactly why",
+    "end_text": "you won't believe it."
+  }},
+  {{
+    "title": "Another Great Hook",
+    "start_text": "But wait, there's more",
+    "end_text": "to the story."
+  }},
+  {{
+    "title": "Mind Blown",
+    "start_text": "The final truth is",
+    "end_text": "what happens next."
+  }}
+]
 </s>
 <|user|>
 Transcript:
-{transcript_text[:1500]}  # Limiting length for this demo to avoid context window limits
+{transcript_text[:1500]}
 </s>
 <|assistant|>
-"""
+[
+  {{
+    "title":"""
 
     response = llm_instance(prompt, max_tokens=300, stop=["</s>"], temperature=0.3)
     
-    output_text = response['choices'][0]['text'].strip()
+    # Re-attach the pre-filled start to the output text
+    output_text = '[\n  {\n    "title":' + response['choices'][0]['text'].strip()
+    
+    print("\n--- RAW LLM OUTPUT ---")
+    print(output_text)
+    print("----------------------\n")
     
     # Try to parse the output as JSON
     try:

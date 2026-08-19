@@ -18,8 +18,10 @@ def hash_file(file_path):
         hasher.update(buf)
     return hasher.hexdigest()
 
-def process_video(job_id: str, file_path: str):
+def process_video(job_id: str, file_path: str, font: str = "Montserrat-Black.ttf", destinations_str: str = "TikTok"):
     try:
+        destinations = [d.strip() for d in destinations_str.split(',')]
+        
         # Step 1: Extract Audio
         update_job(job_id, message="Extracting audio...", progress=10)
         audio_path = f"uploads/{job_id}_audio.wav"
@@ -84,18 +86,31 @@ def process_video(job_id: str, file_path: str):
         rendered_files = []
         for i, clip in enumerate(clips):
             start_word = clip.get("start_text", "").split()[0] if clip.get("start_text") else ""
+            end_word = clip.get("end_text", "").split()[-1] if clip.get("end_text") else ""
             
             start_time = 0.0
-            for w in transcript_data:
-                if w["word"].strip(".,!?").lower() == start_word.lower():
-                    start_time = w["start"]
-                    break
-                    
-            end_time = start_time + 15.0 # default 15s
+            end_time = 0.0
             
-            out_file = f"{job_output_dir}/short_{i}.mp4"
-            render_clip(file_path, start_time, end_time, transcript_data, out_file)
-            rendered_files.append(out_file)
+            for w in transcript_data:
+                if w["word"].strip(".,!?").lower() == start_word.lower() and start_time == 0.0:
+                    start_time = w["start"]
+                if w["word"].strip(".,!?").lower() == end_word.lower() and start_time > 0.0:
+                    end_time = w["end"]
+                    
+            if end_time <= start_time:
+                end_time = start_time + 60.0 # fallback to 60s
+            
+            # Cap at 60s max
+            if end_time - start_time > 65.0:
+                end_time = start_time + 60.0
+                
+            for dest in destinations:
+                dest_clean = dest.lower().replace(" ", "")
+                out_file = f"{job_output_dir}/short_{i}_{dest_clean}.mp4"
+                
+                # Render using the selected font and destination aspect ratio
+                render_clip(file_path, start_time, end_time, transcript_data, out_file, font, dest)
+                rendered_files.append(out_file)
             
         update_job(job_id, message="Processing complete!", progress=100, status="completed", clips=rendered_files)
         

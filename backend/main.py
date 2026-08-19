@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
@@ -12,8 +12,8 @@ app = FastAPI(title="Auto Shorts API")
 # Allow CORS for local frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"], # Vite default port
-    allow_credentials=True,
+    allow_origins=["*"], # Allow any local port
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -35,7 +35,12 @@ def read_root():
     return {"status": "ok", "message": "Auto Shorts API running"}
 
 @app.post("/api/upload")
-async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_video(
+    background_tasks: BackgroundTasks, 
+    file: UploadFile = File(...),
+    font: str = Form("Montserrat-Black.ttf"),
+    destinations: str = Form("TikTok")
+):
     if not file.filename.endswith(('.mp4', '.mov', '.mkv')):
         raise HTTPException(status_code=400, detail="Invalid file type")
     
@@ -48,7 +53,7 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     create_job(job_id, file.filename, "processing", 0, "Video uploaded, starting audio extraction")
     
     # We will trigger the background task here
-    background_tasks.add_task(process_video, job_id, file_path)
+    background_tasks.add_task(process_video, job_id, file_path, font, destinations)
     
     return {"job_id": job_id, "message": "Upload successful, processing started."}
 

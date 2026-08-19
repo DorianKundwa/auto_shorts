@@ -3,3 +3,14 @@ frontend/node_modules/
 __pycache__/ 
 output/ 
 cache/ 
+backend/models/  
+backend/uploads/  
+backend/output/  
+backend/cache/  
+test/  
+backend/models/ 
+backend/uploads/ 
+backend/output/ 
+backend/cache/ 
+test/ 
+fonts/ 
