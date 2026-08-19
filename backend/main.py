@@ -5,6 +5,7 @@ import os
 import uuid
 import shutil
 from services.pipeline import process_video
+from database import init_db, create_job, get_job, get_all_jobs
 
 app = FastAPI(title="Auto Shorts API")
 
@@ -26,8 +27,8 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # Serve output directory for the frontend to preview videos
 app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
-# In-memory store for job status
-jobs = {}
+# Initialize SQLite DB
+init_db()
 
 @app.get("/")
 def read_root():
@@ -44,21 +45,20 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
-    jobs[job_id] = {
-        "status": "processing",
-        "progress": 0,
-        "message": "Video uploaded, starting audio extraction",
-        "file_path": file_path,
-        "clips": []
-    }
+    create_job(job_id, file.filename, "processing", 0, "Video uploaded, starting audio extraction")
     
     # We will trigger the background task here
-    background_tasks.add_task(process_video, job_id, file_path, jobs)
+    background_tasks.add_task(process_video, job_id, file_path)
     
     return {"job_id": job_id, "message": "Upload successful, processing started."}
 
 @app.get("/api/status/{job_id}")
 def get_status(job_id: str):
-    if job_id not in jobs:
+    job = get_job(job_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return jobs[job_id]
+    return job
+
+@app.get("/api/jobs")
+def list_jobs():
+    return get_all_jobs()

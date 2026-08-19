@@ -1,27 +1,27 @@
 import os
 import cv2
-import mediapipe as mp
-from moviepy.editor import VideoFileClip, TextClip, CompositeVideoClip
+from moviepy import VideoFileClip, TextClip, CompositeVideoClip
 from scenedetect import detect, ContentDetector
 
-mp_face_detection = mp.solutions.face_detection
+# Load the pre-trained OpenCV face detector
+face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
 
 def find_face_center(frame):
     """
-    Returns the x-coordinate of the center of the face in the frame.
+    Returns the x-coordinate of the center of the face in the frame using OpenCV.
     If no face is found, returns the center of the frame.
     """
     height, width, _ = frame.shape
-    with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5) as face_detection:
-        # Convert the BGR image to RGB
-        results = face_detection.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        
-        if results.detections:
-            # Assume the first face is the primary speaker
-            detection = results.detections[0]
-            bbox = detection.location_data.relative_bounding_box
-            x_center = bbox.xmin + (bbox.width / 2)
-            return int(x_center * width)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    
+    # Detect faces
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    
+    if len(faces) > 0:
+        # Assume the largest face (or first one) is the primary speaker
+        (x, y, w, h) = faces[0]
+        x_center = x + (w // 2)
+        return x_center
             
     return width // 2
 
