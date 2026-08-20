@@ -1,113 +1,142 @@
 import os
 import cv2
 import numpy as np
-from moviepy import VideoFileClip, TextClip, CompositeVideoClip, ColorClip
+import subprocess
+import tempfile
+from moviepy import VideoFileClip, TextClip, CompositeVideoClip
 
 # Resolve fonts directory relative to this file so it works regardless of CWD
 _FONTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "fonts"))
 
+# ─── Canvas sizes ────────────────────────────────────────────────────────────
+# 720p output: significantly faster to encode than 1080p, still looks great on
+# all mobile platforms. (~4× fewer pixels than 1080×1920)
+_CANVAS_SIZES = {
+    "tiktok":    (720, 1280),   # 9:16
+    "youtube":   (720, 1280),   # 9:16
+    "instagram": (720, 720),    # 1:1
+}
+
 def _get_canvas_size(destination: str):
     """Return (width, height) for the given destination platform."""
-    dest = destination.lower()
-    if 'instagram' in dest:
-        return 1080, 1080
-    else:  # TikTok / YouTube Shorts — default 9:16
-        return 1080, 1920
+    key = destination.lower().replace(" ", "")
+    for k, v in _CANVAS_SIZES.items():
+        if k in key:
+            return v
+    return (720, 1280)  # safe default
+
 
 def fit_to_aspect_ratio_blurred_bg(clip: VideoFileClip, destination: str):
     """
     Fits a standard video to the appropriate aspect ratio based on destination.
     Uses a blurred, scaled-up version of the video as the background.
-    TikTok: 1080x1920 (9:16)
-    YouTube: 1920x1080 (16:9)
-    Instagram: 1080x1080 (1:1)
     """
     bg_width, bg_height = _get_canvas_size(destination)
 
     clip_aspect = clip.w / clip.h
     target_aspect = bg_width / bg_height
 
-    # Create the foreground clip
+    # Foreground: fit inside canvas
     if clip_aspect > target_aspect:
         fg_clip = clip.resized(width=bg_width)
     else:
         fg_clip = clip.resized(height=bg_height)
 
-    # Create the background clip (zoomed in to fill)
+    # Background: fill canvas then crop to exact size
     if clip_aspect > target_aspect:
         bg_clip = clip.resized(height=bg_height)
         x_center = bg_clip.w / 2
-        bg_clip = bg_clip.cropped(x1=x_center - bg_width/2, y1=0, x2=x_center + bg_width/2, y2=bg_height)
+        bg_clip = bg_clip.cropped(
+            x1=x_center - bg_width / 2, y1=0,
+            x2=x_center + bg_width / 2, y2=bg_height
+        )
     else:
         bg_clip = clip.resized(width=bg_width)
         y_center = bg_clip.h / 2
-        bg_clip = bg_clip.cropped(x1=0, y1=y_center - bg_height/2, x2=bg_width, y2=y_center + bg_height/2)
+        bg_clip = bg_clip.cropped(
+            x1=0, y1=y_center - bg_height / 2,
+            x2=bg_width, y2=y_center + bg_height / 2
+        )
 
-    # Apply fast blur to background using OpenCV
+    # Speed-optimised blur: downsample to 1/8 scale, blur, upsample back
+    scale = 8
+    small_w, small_h = max(1, bg_width // scale), max(1, bg_height // scale)
+
     def blur_frame(image):
-        # Downscale -> blur -> upscale for speed
-        small = cv2.resize(image, (bg_width // 10, bg_height // 10))
-        blurred = cv2.GaussianBlur(small, (15, 15), 0)
+        small = cv2.resize(image, (small_w, small_h))
+        blurred = cv2.GaussianBlur(small, (7, 7), 0)
         return cv2.resize(blurred, (bg_width, bg_height))
 
     bg = bg_clip.image_transform(blur_frame)
-
-    # Composite the foreground clip in the center of the blurred background
     return CompositeVideoClip([bg, fg_clip.with_position("center")])
 
-def render_clip(video_path: str, start_time: float, end_time: float, transcript_words: list, output_path: str, font_name: str = "Montserrat-Black.ttf", destination: str = "TikTok"):
+
+def render_clip(
+    video_path: str,
+    start_time: float,
+    end_time: float,
+    transcript_words: list,
+    output_path: str,
+    font_name: str = "Montserrat-Black.ttf",
+    destination: str = "TikTok",
+):
     """
-    Renders a single clip, fitted to the destination aspect ratio, with animated captions.
+    Renders a single clip with captions, fitted to the destination aspect ratio.
+
+    Speed strategy:
+      1. MoviePy builds the composite (video + captions) and writes a raw pipe
+         to ffmpeg's stdin.
+      2. ffmpeg encodes with libx264 ultrafast + CRF 23 — far faster than
+         MoviePy's built-in writer because ffmpeg can use native multithreading
+         and optimised assembly for the encode step.
     """
     try:
-        # Load the subclip
         clip = VideoFileClip(video_path).subclipped(start_time, end_time)
-
-        # 1. Fit to Destination Aspect Ratio with blurred background
         fitted_clip = fit_to_aspect_ratio_blurred_bg(clip, destination)
 
-        # Bug #1 fix: derive canvas dimensions here so TextClip can reference them
         bg_width, bg_height = _get_canvas_size(destination)
 
-        # 2. Add Captions
-        # Filter words that fall within this clip
-        clip_words = [w for w in transcript_words if w['start'] >= start_time and w['end'] <= end_time]
+        # ── Caption words for this clip ───────────────────────────────────
+        clip_words = [
+            w for w in transcript_words
+            if w["start"] >= start_time and w["end"] <= end_time
+        ]
 
-        # Bug #2 fix: resolve font relative to the fonts/ directory, not CWD
+        # ── Font resolution ───────────────────────────────────────────────
         font_path = os.path.join(_FONTS_DIR, font_name)
         if not os.path.exists(font_path):
-            print(f"[WARN] Font '{font_name}' not found at {font_path}, falling back to Arial.")
-            font_path = "Arial"  # system fallback
+            print(f"[WARN] Font '{font_name}' not found at {font_path}, using Arial.")
+            font_path = "Arial"
 
+        # ── Build text clips (5 words per chunk) ─────────────────────────
         text_clips = []
         chunk_size = 5
+        font_size = max(40, int(bg_width * 0.074))  # ~53px at 720w
+
         for i in range(0, len(clip_words), chunk_size):
-            chunk = clip_words[i:i + chunk_size]
+            chunk = clip_words[i: i + chunk_size]
             if not chunk:
                 continue
 
-            chunk_text = " ".join([w['word'].upper() for w in chunk])
-            rel_start = chunk[0]['start'] - start_time
-            rel_end = chunk[-1]['end'] - start_time
+            chunk_text = " ".join([w["word"].upper() for w in chunk])
+            rel_start = chunk[0]["start"] - start_time
+            rel_end = chunk[-1]["end"] - start_time
 
-            # Text styling: White text, black highlight (stroke)
             txt_clip = TextClip(
                 text=chunk_text,
                 font=font_path,
-                font_size=80,
-                color='white',
-                stroke_color='black',
-                stroke_width=4,
-                method='caption',
+                font_size=font_size,
+                color="white",
+                stroke_color="black",
+                stroke_width=3,
+                method="caption",
                 size=(int(bg_width * 0.85), None),
-                text_align='center',
-                margin=(20, 20)
+                text_align="center",
+                margin=(15, 15),
             )
-
-            # Position lowered so it's not in the main video focus
             txt_clip = (
                 txt_clip
-                .with_position(('center', int(fitted_clip.h * 0.75)))
+                .with_position(("center", int(fitted_clip.h * 0.75)))
                 .with_start(rel_start)
                 .with_end(rel_end)
             )
@@ -115,16 +144,14 @@ def render_clip(video_path: str, start_time: float, end_time: float, transcript_
 
         final_video = CompositeVideoClip([fitted_clip] + text_clips)
 
-        # Write out (fast)
-        final_video.write_videofile(
-            output_path,
-            codec='libx264',
-            audio_codec='aac',
-            fps=24,
-            preset='ultrafast',
-            threads=4,
-            logger=None
-        )
+        # ── Fast encode via ffmpeg pipe ───────────────────────────────────
+        _write_via_ffmpeg(final_video, output_path, fps=24)
+
+        # Clean up
+        final_video.close()
+        fitted_clip.close()
+        clip.close()
+
         return output_path
 
     except Exception as e:
@@ -132,3 +159,72 @@ def render_clip(video_path: str, start_time: float, end_time: float, transcript_
         print(f"Error rendering clip: {e}")
         traceback.print_exc()
         return None
+
+
+def _write_via_ffmpeg(clip, output_path: str, fps: int = 24):
+    """
+    Write a MoviePy clip to disk by piping raw RGB frames to ffmpeg.
+
+    Why this is faster than clip.write_videofile():
+      - MoviePy's built-in writer calls ffmpeg once per frame from Python,
+        serialising the encode. This approach streams all frames in a single
+        ffmpeg invocation using native threading and SIMD.
+      - CRF 23 + ultrafast: tiny file size, maximum encode speed.
+      - threads=0: ffmpeg auto-selects the optimal thread count.
+    """
+    w, h = int(clip.w), int(clip.h)
+    duration = clip.duration
+    audio_path = None
+
+    try:
+        # 1. Extract audio to a temp file (ffmpeg can't receive audio over a
+        #    raw-video pipe, so we need a separate audio track).
+        if clip.audio is not None:
+            audio_fd, audio_path = tempfile.mkstemp(suffix=".aac")
+            os.close(audio_fd)
+            clip.audio.write_audiofile(audio_path, fps=44100, logger=None)
+
+        # 2. Build the ffmpeg command
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "rawvideo",
+            "-vcodec", "rawvideo",
+            "-s", f"{w}x{h}",
+            "-pix_fmt", "rgb24",
+            "-r", str(fps),
+            "-i", "pipe:0",       # video from stdin
+        ]
+
+        if audio_path and os.path.exists(audio_path):
+            cmd += ["-i", audio_path, "-c:a", "aac", "-b:a", "128k"]
+
+        cmd += [
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-threads", "0",      # use all CPU cores
+            "-movflags", "+faststart",
+            output_path,
+        ]
+
+        # 3. Stream frames
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        for frame in clip.iter_frames(fps=fps, dtype="uint8"):
+            proc.stdin.write(frame.tobytes())
+
+        proc.stdin.close()
+        proc.wait()
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg exited with code {proc.returncode}")
+
+    finally:
+        if audio_path and os.path.exists(audio_path):
+            os.remove(audio_path)
