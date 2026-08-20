@@ -26,6 +26,9 @@ function App() {
   const [jobStatus, setJobStatus] = useState(null);
   const [error, setError] = useState('');
   
+  // Transcript Upload State
+  const [transcriptFile, setTranscriptFile] = useState(null);
+  
   // New Form State
   const [selectedFont, setSelectedFont] = useState(AVAILABLE_FONTS[0].id);
   const [selectedDestinations, setSelectedDestinations] = useState(['TikTok']);
@@ -59,6 +62,9 @@ function App() {
     
     const formData = new FormData();
     formData.append('file', file);
+    if (transcriptFile) {
+      formData.append('transcript', transcriptFile);
+    }
     formData.append('font', selectedFont);
     formData.append('destinations', selectedDestinations.join(','));
     
@@ -207,6 +213,36 @@ function App() {
                   </div>
                 </div>
 
+                {/* Transcript Upload (Optional) */}
+                <div className="mb-8">
+                  <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-slate-200">
+                    <Type className="w-5 h-5 text-purple-400" /> Transcript (Optional)
+                  </h3>
+                  <div className="w-full border-2 border-dashed border-slate-700 hover:border-slate-500 hover:bg-slate-800/50 rounded-2xl p-6 text-center cursor-pointer transition-all duration-300 relative overflow-hidden">
+                    <input 
+                      type="file" 
+                      accept=".json,.srt"
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          setTranscriptFile(e.target.files[0]);
+                        }
+                      }}
+                    />
+                    {transcriptFile ? (
+                      <div className="space-y-1">
+                        <p className="text-md font-semibold text-purple-300 truncate px-2">{transcriptFile.name}</p>
+                        <p className="text-xs text-slate-400">{(transcriptFile.size / 1024).toFixed(2)} KB</p>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-md font-medium text-slate-300">Upload Transcript (.json or .srt)</p>
+                        <p className="text-slate-500 text-xs mt-1">Speeds up generation by skipping Whisper AI</p>
+                      </>
+                    )}
+                  </div>
+                </div>
+
                 {/* Generate Button */}
                 <button
                   onClick={handleUpload}
@@ -282,9 +318,13 @@ function App() {
               >
                 <AnimatePresence>
                   {jobStatus.clips.map((clip, i) => {
-                    // Extract destination from filename e.g. short_0_youtube.mp4
-                    const nameParts = clip.split('_');
-                    const dest = nameParts.length > 2 ? nameParts[2].split('.')[0].toUpperCase() : 'CLIP';
+                    // Bug #7 fix: extract destination from the LAST underscore segment
+                    // before the extension (e.g. "My_Cool_Hook_tiktok.mp4" → "TIKTOK").
+                    // Using a fixed index like [2] breaks when titles contain underscores.
+                    const fileBasename = clip.split('/').pop() || clip;
+                    const withoutExt = fileBasename.replace(/\.[^/.]+$/, '');
+                    const segments = withoutExt.split('_');
+                    const dest = segments.length > 0 ? segments[segments.length - 1].toUpperCase() : 'CLIP';
                     
                     return (
                       <motion.div 

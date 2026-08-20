@@ -38,6 +38,7 @@ def read_root():
 async def upload_video(
     background_tasks: BackgroundTasks, 
     file: UploadFile = File(...),
+    transcript: UploadFile = File(None),
     font: str = Form("Montserrat-Black.ttf"),
     destinations: str = Form("TikTok")
 ):
@@ -50,10 +51,16 @@ async def upload_video(
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
+    transcript_path = None
+    if transcript and transcript.filename:
+        transcript_path = os.path.join(UPLOAD_DIR, f"{job_id}_{transcript.filename}")
+        with open(transcript_path, "wb") as buffer:
+            shutil.copyfileobj(transcript.file, buffer)
+            
     create_job(job_id, file.filename, "processing", 0, "Video uploaded, starting audio extraction")
     
     # We will trigger the background task here
-    background_tasks.add_task(process_video, job_id, file_path, font, destinations)
+    background_tasks.add_task(process_video, job_id, file_path, file.filename, font, destinations, transcript_path)
     
     return {"job_id": job_id, "message": "Upload successful, processing started."}
 

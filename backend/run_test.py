@@ -17,7 +17,7 @@ def main():
     create_job(job_id, os.path.basename(video_path), "processing", 0, "Test job started")
     
     print(f"Starting pipeline for job {job_id} on {video_path}")
-    process_video(job_id, video_path, font="Montserrat-Black.ttf", destinations_str="TikTok, YouTube, Instagram")
+    process_video(job_id, video_path, os.path.basename(video_path), font="Montserrat-Black.ttf", destinations_str="TikTok, YouTube, Instagram")
     
     # Check final status
     final_job = get_job(job_id)
