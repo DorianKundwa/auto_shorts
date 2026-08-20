@@ -161,70 +161,98 @@ def render_clip(
         return None
 
 
+
 def _write_via_ffmpeg(clip, output_path: str, fps: int = 24):
     """
-    Write a MoviePy clip to disk by piping raw RGB frames to ffmpeg.
+    Write a MoviePy composite clip to disk quickly.
 
-    Why this is faster than clip.write_videofile():
-      - MoviePy's built-in writer calls ffmpeg once per frame from Python,
-        serialising the encode. This approach streams all frames in a single
-        ffmpeg invocation using native threading and SIMD.
-      - CRF 23 + ultrafast: tiny file size, maximum encode speed.
-      - threads=0: ffmpeg auto-selects the optimal thread count.
+    Strategy:
+      Step 1 — pipe raw RGB frames into ffmpeg to produce a silent video fast.
+      Step 2 — if audio exists, mux it in with a second ffmpeg call (copy stream,
+               no re-encode needed for the video track).
+
+    This avoids the MoviePy audio write deadlock: write_audiofile() blocks the
+    Python process before ffmpeg starts receiving frames, causing a pipe hang.
     """
     w, h = int(clip.w), int(clip.h)
-    duration = clip.duration
-    audio_path = None
+    silent_fd, silent_path = tempfile.mkstemp(suffix="_silent.mp4")
+    os.close(silent_fd)
 
     try:
-        # 1. Extract audio to a temp file (ffmpeg can't receive audio over a
-        #    raw-video pipe, so we need a separate audio track).
-        if clip.audio is not None:
-            audio_fd, audio_path = tempfile.mkstemp(suffix=".aac")
-            os.close(audio_fd)
-            clip.audio.write_audiofile(audio_path, fps=44100, logger=None)
-
-        # 2. Build the ffmpeg command
-        cmd = [
+        # ── Step 1: encode video-only via stdin pipe ──────────────────────
+        cmd_video = [
             "ffmpeg", "-y",
             "-f", "rawvideo",
             "-vcodec", "rawvideo",
             "-s", f"{w}x{h}",
             "-pix_fmt", "rgb24",
             "-r", str(fps),
-            "-i", "pipe:0",       # video from stdin
-        ]
-
-        if audio_path and os.path.exists(audio_path):
-            cmd += ["-i", audio_path, "-c:a", "aac", "-b:a", "128k"]
-
-        cmd += [
+            "-i", "pipe:0",
             "-c:v", "libx264",
             "-preset", "ultrafast",
             "-crf", "23",
             "-pix_fmt", "yuv420p",
-            "-threads", "0",      # use all CPU cores
-            "-movflags", "+faststart",
-            output_path,
+            "-threads", "0",
+            "-an",                # no audio in this pass
+            silent_path,
         ]
 
-        # 3. Stream frames
         proc = subprocess.Popen(
-            cmd,
+            cmd_video,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
 
         for frame in clip.iter_frames(fps=fps, dtype="uint8"):
             proc.stdin.write(frame.tobytes())
 
         proc.stdin.close()
-        proc.wait()
+        _, stderr = proc.communicate()
 
         if proc.returncode != 0:
-            raise RuntimeError(f"ffmpeg exited with code {proc.returncode}")
+            raise RuntimeError(f"ffmpeg video pass failed: {stderr.decode(errors='replace')}")
+
+        # ── Step 2: mux audio from the composite clip ─────────────────────
+        if clip.audio is not None:
+            audio_fd, audio_path = tempfile.mkstemp(suffix=".wav")
+            os.close(audio_fd)
+            try:
+                clip.audio.write_audiofile(
+                    audio_path,
+                    fps=44100,
+                    codec="pcm_s16le",
+                    logger=None,
+                )
+                cmd_mux = [
+                    "ffmpeg", "-y",
+                    "-i", silent_path,
+                    "-i", audio_path,
+                    "-c:v", "copy",
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    "-shortest",
+                    output_path,
+                ]
+                result = subprocess.run(
+                    cmd_mux,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"ffmpeg mux failed: {result.stderr.decode(errors='replace')}"
+                    )
+            finally:
+                if os.path.exists(audio_path):
+                    os.remove(audio_path)
+        else:
+            # No audio — just rename the silent file to final output
+            import shutil
+            shutil.move(silent_path, output_path)
+            silent_path = None  # prevent double-delete in finally
 
     finally:
-        if audio_path and os.path.exists(audio_path):
-            os.remove(audio_path)
+        if silent_path and os.path.exists(silent_path):
+            os.remove(silent_path)

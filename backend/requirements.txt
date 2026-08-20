@@ -6,6 +6,8 @@ faster-whisper
 scenedetect
 moviepy
 mediapipe
-llama-cpp-python
 requests
 opencv-python
+# LLM inference is handled by Ollama (external service).
+# Install Ollama from https://ollama.com and run: ollama pull qwen3:4b
+# llama-cpp-python is no longer needed.

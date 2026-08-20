@@ -1,123 +1,127 @@
-import os
 import json
 import requests
-from llama_cpp import Llama
 
-# Qwen3-4B-Instruct Q4_K_M — better instruction following, ~2.6 GB, same family
-MODEL_URL = "https://huggingface.co/bartowski/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"
-MODEL_PATH = "models/Qwen3-4B-Q4_K_M.gguf"
-
-llm = None
+# ─── Ollama config ────────────────────────────────────────────────────────────
+OLLAMA_URL   = "http://localhost:11434"
+OLLAMA_MODEL = "qwen3:4b"   # change to "phi4-mini" etc. if preferred
 
 
-def download_model_if_needed():
-    if not os.path.exists("models"):
-        os.makedirs("models")
-
-    if os.path.exists(MODEL_PATH) and os.path.getsize(MODEL_PATH) < 100_000_000:
-        print("Model file is corrupted or incomplete. Deleting and re-downloading...")
-        os.remove(MODEL_PATH)
-
-    if not os.path.exists(MODEL_PATH):
-        print(f"Downloading Qwen3-4B model ({MODEL_URL.split('/')[-1]}). This may take a few minutes...")
-        response = requests.get(MODEL_URL, stream=True)
-        response.raise_for_status()
-        total = int(response.headers.get("content-length", 0))
-        downloaded = 0
-        with open(MODEL_PATH, "wb") as f:
-            for chunk in response.iter_content(chunk_size=65536):
-                f.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    pct = downloaded * 100 // total
-                    print(f"\r  Downloading... {pct}%", end="", flush=True)
-        print("\nModel downloaded successfully!")
+def _ollama_running() -> bool:
+    try:
+        r = requests.get(f"{OLLAMA_URL}/", timeout=3)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
-def get_llm():
-    global llm
-    if llm is None:
-        download_model_if_needed()
-        # n_ctx=4096 gives Qwen3 more room for longer transcripts
-        # n_threads=0 → use all CPU cores
-        llm = Llama(
-            model_path=MODEL_PATH,
-            n_ctx=4096,
-            n_threads=0,
-            verbose=False,
-        )
-    return llm
+def _model_available() -> bool:
+    """Check if OLLAMA_MODEL has been pulled."""
+    try:
+        r = requests.get(f"{OLLAMA_URL}/api/tags", timeout=5)
+        models = [m["name"] for m in r.json().get("models", [])]
+        # Ollama normalises names; match on the base name
+        base = OLLAMA_MODEL.split(":")[0]
+        return any(base in m for m in models)
+    except Exception:
+        return False
 
 
 def score_chunks(transcript_text: str):
     """
-    Pass the transcript to Qwen3-4B and ask it to identify 3 distinct 60-second hooks.
-    Returns a list of dicts: [{title, start_text, end_text}, ...]
-    """
-    llm_instance = get_llm()
+    Ask Ollama (Qwen3:4b) to identify 3 distinct ~60-second hooks in the
+    transcript. Returns a list: [{title, start_text, end_text}, ...]
 
-    # Qwen3 chat format — /no_think disables the <think> reasoning block
-    # so we get pure JSON output immediately without wasted tokens.
-    system_msg = (
-        "You are an expert video editor AI. Your ONLY job is to output valid JSON. "
-        "Do not write any explanation, markdown, or text outside the JSON array."
+    Uses Ollama's OpenAI-compatible /v1/chat/completions endpoint so no
+    extra SDK is needed — just the `requests` library that's already installed.
+    """
+    if not _ollama_running():
+        raise RuntimeError(
+            "Ollama is not running. Start it with: ollama serve"
+        )
+
+    if not _model_available():
+        raise RuntimeError(
+            f"Model '{OLLAMA_MODEL}' not pulled yet. Run: ollama pull {OLLAMA_MODEL}"
+        )
+
+    system_prompt = (
+        "You are an expert viral video editor AI. "
+        "Output ONLY valid JSON — no markdown, no explanation, nothing else."
     )
 
-    user_msg = f"""/no_think
-Find EXACTLY 3 highly engaging segments (hooks) in the transcript below for short-form social video.
-The 3 clips MUST come from completely different, distinct parts of the video.
-Each clip should be approximately 60 seconds long (~120-150 words).
+    user_prompt = f"""/no_think
+Find EXACTLY 3 highly engaging ~60-second segments (hooks) from completely \
+different parts of the transcript below. Each should be ~120-150 words long.
 
-Respond ONLY with a valid JSON array of exactly 3 objects. No other text.
-Format:
+Return ONLY a JSON array of exactly 3 objects. No other text.
 [
   {{
-    "title": "<Catchy Title>",
-    "start_text": "<First 4 words of the clip, exactly as in the transcript>",
-    "end_text": "<Last 4 words of the clip, exactly as in the transcript>"
+    "title": "<catchy viral title>",
+    "start_text": "<first 4 words of the segment, exactly as in transcript>",
+    "end_text": "<last 4 words of the segment, exactly as in transcript>"
   }}
 ]
 
 Transcript:
-{transcript_text[:3000]}"""
+{transcript_text[:4000]}"""
 
-    response = llm_instance.create_chat_completion(
-        messages=[
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user",   "content": user_prompt},
         ],
-        max_tokens=512,
-        temperature=0.3,
-        stop=["```"],
-    )
+        "stream": False,
+        "options": {
+            "temperature": 0.3,
+            "num_predict": 512,
+        },
+    }
 
-    output_text = response["choices"][0]["message"]["content"].strip()
+    try:
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/chat",
+            json=payload,
+            timeout=120,
+        )
+        resp.raise_for_status()
+        output_text = resp.json()["message"]["content"].strip()
+    except Exception as e:
+        print(f"[LLM] Ollama request failed: {e}")
+        return _fallback_split(transcript_text)
 
     print("\n--- RAW LLM OUTPUT ---")
     print(output_text)
     print("----------------------\n")
 
-    # Parse JSON — be tolerant of leading/trailing text
+    # Strip optional <think>...</think> block that Qwen3 may emit
+    if "<think>" in output_text and "</think>" in output_text:
+        output_text = output_text[output_text.rfind("</think>") + len("</think>"):].strip()
+
     try:
-        start_idx = output_text.find("[")
-        end_idx = output_text.rfind("]") + 1
-        if start_idx != -1 and end_idx > start_idx:
-            clips = json.loads(output_text[start_idx:end_idx])
+        start = output_text.find("[")
+        end   = output_text.rfind("]") + 1
+        if start != -1 and end > start:
+            clips = json.loads(output_text[start:end])
             if isinstance(clips, list) and len(clips) > 0:
                 return clips
-        # Try direct parse if no array brackets found wrapping
-        clips = json.loads(output_text)
-        return clips
     except Exception as e:
-        print("Failed to parse LLM response:", str(e))
-        # Fallback: split transcript into 3 equal chunks
-        words = transcript_text.split()
-        chunk = len(words) // 3
-        return [
-            {
-                "title": f"Hook {i + 1}",
-                "start_text": " ".join(words[i * chunk: i * chunk + 4]),
-                "end_text": " ".join(words[min((i + 1) * chunk - 4, len(words) - 4): min((i + 1) * chunk, len(words))]),
-            }
-            for i in range(3)
-        ]
+        print(f"[LLM] JSON parse error: {e}")
+
+    return _fallback_split(transcript_text)
+
+
+def _fallback_split(transcript_text: str):
+    """Split transcript into 3 equal chunks as a last-resort fallback."""
+    print("[LLM] Using equal-split fallback.")
+    words = transcript_text.split()
+    chunk = max(1, len(words) // 3)
+    return [
+        {
+            "title": f"Hook {i + 1}",
+            "start_text": " ".join(words[i * chunk: i * chunk + 4]),
+            "end_text":   " ".join(words[min((i + 1) * chunk - 4, len(words) - 4):
+                                         min((i + 1) * chunk, len(words))]),
+        }
+        for i in range(3)
+    ]
