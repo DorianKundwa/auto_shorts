@@ -14,11 +14,33 @@ def init_db():
             status TEXT,
             progress INTEGER,
             message TEXT,
-            clips_json TEXT
+            clips_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
         )
     ''')
+    # Migration: add created_at to databases that pre-date this column
+    try:
+        c.execute("ALTER TABLE jobs ADD COLUMN created_at TEXT DEFAULT (datetime('now'))")
+    except Exception:
+        pass  # Column already exists
     conn.commit()
     conn.close()
+
+
+def _normalize_clips(raw: list) -> list:
+    """
+    Normalise the clips list to always be [{path, title}, ...] regardless of
+    which version of the pipeline wrote the record.
+    Old format: ["output/foo/bar.mp4", ...]
+    New format: [{"path": "output/foo/bar.mp4", "title": "Hook 1"}, ...]
+    """
+    out = []
+    for item in raw:
+        if isinstance(item, str):
+            out.append({"path": item, "title": None})
+        elif isinstance(item, dict):
+            out.append(item)
+    return out
 
 def create_job(job_id, filename, status, progress, message):
     conn = sqlite3.connect(DB_PATH)
@@ -56,7 +78,7 @@ def get_job(job_id):
     
     if row:
         job_dict = dict(row)
-        job_dict['clips'] = json.loads(job_dict['clips_json'])
+        job_dict['clips'] = _normalize_clips(json.loads(job_dict['clips_json']))
         del job_dict['clips_json']
         return job_dict
     return None
@@ -65,14 +87,14 @@ def get_all_jobs():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("SELECT * FROM jobs ORDER BY rowid DESC")
+    c.execute("SELECT * FROM jobs ORDER BY created_at DESC")
     rows = c.fetchall()
     conn.close()
     
     jobs = []
     for row in rows:
         job_dict = dict(row)
-        job_dict['clips'] = json.loads(job_dict['clips_json'])
+        job_dict['clips'] = _normalize_clips(json.loads(job_dict['clips_json']))
         del job_dict['clips_json']
         jobs.append(job_dict)
     return jobs

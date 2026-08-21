@@ -40,7 +40,8 @@ async def upload_video(
     file: UploadFile = File(...),
     transcript: UploadFile = File(None),
     font: str = Form("Montserrat-Black.ttf"),
-    destinations: str = Form("TikTok")
+    destinations: str = Form("TikTok"),
+    num_clips: int = Form(3),
 ):
     if not file.filename.endswith(('.mp4', '.mov', '.mkv')):
         raise HTTPException(status_code=400, detail="Invalid file type")
@@ -57,10 +58,9 @@ async def upload_video(
         with open(transcript_path, "wb") as buffer:
             shutil.copyfileobj(transcript.file, buffer)
             
-    create_job(job_id, file.filename, "processing", 0, "Video uploaded, starting audio extraction")
-    
-    # We will trigger the background task here
-    background_tasks.add_task(process_video, job_id, file_path, file.filename, font, destinations, transcript_path)
+    num_clips = max(1, min(num_clips, 5))  # clamp to 1–5
+    create_job(job_id, file.filename, "processing", 0, "Video uploaded, starting processing")
+    background_tasks.add_task(process_video, job_id, file_path, file.filename, font, destinations, transcript_path, num_clips)
     
     return {"job_id": job_id, "message": "Upload successful, processing started."}
 

@@ -5,14 +5,28 @@ import webbrowser
 import time
 import socket
 
-def get_open_port():
-    """Finds an available open port on the system."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(('', 0))
-    s.listen(1)
-    port = s.getsockname()[1]
-    s.close()
-    return port
+
+def get_open_port(preferred: int = 0) -> int:
+    """
+    Find an available TCP port.
+    Fix #15: scan upward from 'preferred' (or use a random OS port if 0) so
+    we pick a well-known port rather than a random ephemeral one.  Using a
+    predictable port reduces (but cannot eliminate) the OS race between
+    releasing the socket here and the child process binding to it.
+    """
+    start = preferred if preferred > 0 else 49152  # start of ephemeral range
+    for port in range(start, start + 50):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("127.0.0.1", port))
+                return port
+        except OSError:
+            continue
+    # Absolute fallback: let the OS choose
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 def start_backend(port):
     """Starts the FastAPI backend on the specified port."""
@@ -40,8 +54,8 @@ def start_frontend(frontend_port, backend_port):
 
 if __name__ == "__main__":
     print("Finding open ports...")
-    backend_port = get_open_port()
-    frontend_port = get_open_port()
+    backend_port = get_open_port(preferred=8000)
+    frontend_port = get_open_port(preferred=5173)
     
     print(f"Assigning Backend -> Port {backend_port}")
     print(f"Assigning Frontend -> Port {frontend_port}\n")
