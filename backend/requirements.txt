@@ -8,6 +8,5 @@ moviepy
 mediapipe
 requests
 opencv-python
-# LLM inference is handled by Ollama (external service).
-# Install Ollama from https://ollama.com and run: ollama pull qwen3:4b
-# llama-cpp-python is no longer needed.
+python-dotenv
+# LLM inference is handled primarily by Google Gemini API (with Ollama as fallback).

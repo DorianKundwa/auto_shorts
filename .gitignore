@@ -14,3 +14,7 @@ backend/output/
 backend/cache/ 
 test/ 
 fonts/ 
+.env
+.env.*
+backend/.env
+backend/.env.*
