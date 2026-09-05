@@ -29,12 +29,13 @@ def run_tests():
         else:
             print(f"  [FAIL] {name}" + (f" -> {extra}" if extra else ""))
 
-    def cleanup_db():
+    existing_cfg = get_youtube_config()
+
+    def cleanup_test_artifacts():
         import sqlite3
         try:
             conn = sqlite3.connect("auto_shorts.db")
             c = conn.cursor()
-            c.execute("DELETE FROM youtube_config WHERE key IN ('client_id', 'client_secret')")
             c.execute("DELETE FROM youtube_tokens WHERE channel_id LIKE 'UC_TEST%'")
             c.execute("DELETE FROM published_videos WHERE job_id='test_job_456'")
             conn.commit()
@@ -42,8 +43,19 @@ def run_tests():
         except Exception as e:
             print(f"Cleanup warning: {e}")
 
-    # Ensure clean slate before running tests
-    cleanup_db()
+    def restore_config():
+        cleanup_test_artifacts()
+        import sqlite3
+        try:
+            conn = sqlite3.connect("auto_shorts.db")
+            c = conn.cursor()
+            c.execute("DELETE FROM youtube_config WHERE key IN ('client_id', 'client_secret')")
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"Restore warning: {e}")
+
+    cleanup_test_artifacts()
 
     try:
         # 1. Database initialization
@@ -125,8 +137,8 @@ def run_tests():
         test("Status reflects disconnected", res.json().get("connected") is False)
 
     finally:
-        # Guarantee cleanup of all test artifacts so live database is never polluted
-        cleanup_db()
+        # Guarantee restoration of user credentials so live database is never polluted
+        restore_config()
 
     print(f"\nResults: {passed}/{total} tests passed.\n")
     return passed == total

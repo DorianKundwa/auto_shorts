@@ -8,6 +8,9 @@ import os
 import uuid
 import shutil
 import json
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from services.pipeline import process_video, render_custom_clips
 from services.llm_providers.factory import list_available_providers, get_llm_provider

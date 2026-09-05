@@ -2,6 +2,9 @@ import sqlite3
 import json
 import os
 from typing import Optional, Dict, Any, List
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DB_PATH = "auto_shorts.db"
 
