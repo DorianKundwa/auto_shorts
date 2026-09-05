@@ -205,15 +205,28 @@ class YouTubePublishRequest(BaseModel):
     job_id: Optional[str] = None
 
 
+def is_valid_google_client_id(cid: str) -> bool:
+    if not cid or len(cid.strip()) < 15:
+        return False
+    clean = cid.strip()
+    if clean.startswith("test-") or clean.startswith("your_"):
+        return False
+    return "apps.googleusercontent.com" in clean
+
+
 @app.get("/api/youtube/status")
 def get_youtube_status():
     cfg = get_youtube_config()
     token_info = get_youtube_token()
-    client_id = cfg.get("client_id", "")
+    client_id = cfg.get("client_id", "").strip()
+    client_secret = cfg.get("client_secret", "").strip()
+
+    is_configured = bool(client_id and client_secret) and is_valid_google_client_id(client_id)
 
     return {
-        "configured": bool(client_id and cfg.get("client_secret")),
-        "client_id_preview": (client_id[:16] + "...") if client_id else "",
+        "configured": is_configured,
+        "client_id": client_id if is_configured else "",
+        "client_id_preview": (client_id[:16] + "...") if is_configured else "",
         "redirect_uri": cfg.get("redirect_uri", "http://localhost:8000/api/youtube/callback"),
         "connected": token_info is not None,
         "channel": {
@@ -235,11 +248,14 @@ def configure_youtube(payload: YouTubeConfigRequest):
 @app.get("/api/youtube/auth-url")
 def get_youtube_auth_url():
     cfg = get_youtube_config()
-    client_id = cfg.get("client_id")
+    client_id = cfg.get("client_id", "").strip()
     redirect_uri = cfg.get("redirect_uri", "http://localhost:8000/api/youtube/callback")
 
-    if not client_id:
-        raise HTTPException(status_code=400, detail="YouTube OAuth Client ID is not configured yet. Please configure it in settings.")
+    if not is_valid_google_client_id(client_id):
+        raise HTTPException(
+            status_code=400,
+            detail="A valid Google OAuth Client ID is required. Please configure your Client ID & Secret from Google Cloud Console."
+        )
 
     auth_url = YouTubeService.get_auth_url(client_id, redirect_uri)
     return {"auth_url": auth_url}

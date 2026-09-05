@@ -460,6 +460,17 @@ function App() {
                 <span>Link YouTube Channel</span>
               </motion.button>
             )}
+
+            {/* YouTube Settings Gear Button */}
+            <motion.button
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1,   opacity: 1 }}
+              onClick={() => setShowYoutubeConfigModal(true)}
+              title="YouTube OAuth Credentials Settings"
+              className="p-2 rounded-full bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-slate-400 hover:text-white transition-all cursor-pointer"
+            >
+              <Settings className="w-4 h-4" />
+            </motion.button>
           </div>
 
           <h1 className="text-5xl sm:text-6xl font-black mb-4 tracking-tight leading-tight">
@@ -1209,27 +1220,46 @@ function App() {
               </div>
 
               <div className="space-y-4 text-xs">
-                <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800/90 space-y-2 text-slate-300 leading-relaxed">
-                  <p className="font-bold text-indigo-300">Quick Google Cloud Setup (Project 242796880153):</p>
-                  <ol className="list-decimal list-inside space-y-1.5 text-slate-400">
-                    <li>Enable <b>YouTube Data API v3</b> in Google Cloud Console.</li>
-                    <li>Go to <b>APIs & Services &gt; Credentials &gt; Create Credentials &gt; OAuth client ID</b>.</li>
-                    <li>Application type: <b>Web application</b>.</li>
+                <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800/90 space-y-2.5 text-slate-300 leading-relaxed">
+                  <div className="flex items-center justify-between">
+                    <p className="font-bold text-indigo-300">Google Cloud Setup (Project 242796880153):</p>
+                    <a
+                      href="https://console.cloud.google.com/apis/credentials?project=242796880153"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-indigo-400 hover:text-indigo-300 font-bold inline-flex items-center gap-1"
+                    >
+                      Open Cloud Console <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-slate-400">
                     <li>
-                      Authorized redirect URI:{' '}
+                      <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com?project=242796880153" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline font-medium">
+                        Enable YouTube Data API v3
+                      </a> in your Google Cloud project.
+                    </li>
+                    <li>Go to <b>Credentials &gt; Create Credentials &gt; OAuth client ID</b>.</li>
+                    <li>Select Application type: <b>Web application</b>.</li>
+                    <li>
+                      Add Authorized redirect URI:{' '}
                       <code className="bg-slate-900 px-1.5 py-0.5 rounded text-pink-300 font-mono text-[11px]">
                         {youtubeStatus.redirect_uri || 'http://localhost:8000/api/youtube/callback'}
                       </code>
                     </li>
-                    <li>Paste your Client ID and Client Secret below:</li>
+                    <li>Paste your generated Client ID and Client Secret below:</li>
                   </ol>
+
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300/90 text-[11px] leading-normal flex items-start gap-2">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
+                    <span><b>Fix for Error 401 invalid_client:</b> This error occurs when Google cannot find the Client ID in its database. Make sure your OAuth Client ID is created in Google Cloud Console under project 242796880153 and ends with <code>.apps.googleusercontent.com</code>.</span>
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1.5">OAuth Client ID</label>
                   <input
                     type="text"
-                    placeholder="xxxxxx.apps.googleusercontent.com"
+                    placeholder="242796880153-xxxxxxxx.apps.googleusercontent.com"
                     value={youtubeConfigForm.clientId}
                     onChange={(e) => setYoutubeConfigForm(f => ({ ...f, clientId: e.target.value }))}
                     className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-mono"
@@ -1240,7 +1270,7 @@ function App() {
                   <label className="block text-xs font-bold text-slate-300 mb-1.5">OAuth Client Secret</label>
                   <input
                     type="password"
-                    placeholder="GOCSPX-xxxxxx"
+                    placeholder="GOCSPX-xxxxxxxxxxxxxxxx"
                     value={youtubeConfigForm.clientSecret}
                     onChange={(e) => setYoutubeConfigForm(f => ({ ...f, clientSecret: e.target.value }))}
                     className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-mono"
