@@ -1251,7 +1251,7 @@ function App() {
 
                   <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300/90 text-[11px] leading-normal flex items-start gap-2">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
-                    <span><b>Fix for Error 401 invalid_client:</b> This error occurs when Google cannot find the Client ID in its database. Make sure your OAuth Client ID is created in Google Cloud Console under project 242796880153 and ends with <code>.apps.googleusercontent.com</code>.</span>
+                    <span><b>Fix for Error 403 access_denied ("App has not completed verification"):</b> In Google Cloud Console under <a href="https://console.cloud.google.com/apis/credentials/consent?project=242796880153" target="_blank" rel="noopener noreferrer" className="underline font-bold text-amber-200">OAuth consent screen</a>, scroll down to <b>Test users</b> and add your email (e.g. <code>emolyrics250@gmail.com</code>). Then log in. When warned with "Google hasn't verified this app", click <b>Advanced &gt; Go to auto_shorts (unsafe)</b>.</span>
                   </div>
                 </div>
 
