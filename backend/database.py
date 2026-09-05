@@ -21,6 +21,35 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now'))
         )
     ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS youtube_tokens (
+            channel_id TEXT PRIMARY KEY,
+            channel_title TEXT,
+            channel_avatar TEXT,
+            token_json TEXT,
+            is_default INTEGER DEFAULT 1,
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS published_videos (
+            id TEXT PRIMARY KEY,
+            job_id TEXT,
+            clip_path TEXT,
+            youtube_video_id TEXT,
+            youtube_url TEXT,
+            title TEXT,
+            description TEXT,
+            privacy_status TEXT,
+            published_at TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS youtube_config (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
     # Migrations for existing databases
     try:
         c.execute("ALTER TABLE jobs ADD COLUMN created_at TEXT")
@@ -51,7 +80,7 @@ def create_job(job_id: str, filename: str, status: str, progress: int, message: 
     c = conn.cursor()
     meta_str = json.dumps(metadata or {})
     c.execute('''
-        INSERT INTO jobs (job_id, filename, status, progress, message, clips_json, metadata_json)
+        INSERT OR REPLACE INTO jobs (job_id, filename, status, progress, message, clips_json, metadata_json)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     ''', (job_id, filename, status, progress, message, "[]", meta_str))
     conn.commit()
@@ -137,3 +166,115 @@ def get_all_jobs():
             del job_dict['metadata_json']
         jobs.append(job_dict)
     return jobs
+
+
+# ─── YouTube Channel & Publishing Helpers ─────────────────────────────────────
+
+def save_youtube_config(client_id: str, client_secret: str, redirect_uri: Optional[str] = None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO youtube_config (key, value) VALUES ('client_id', ?)", (client_id,))
+    c.execute("INSERT OR REPLACE INTO youtube_config (key, value) VALUES ('client_secret', ?)", (client_secret,))
+    if redirect_uri:
+        c.execute("INSERT OR REPLACE INTO youtube_config (key, value) VALUES ('redirect_uri', ?)", (redirect_uri,))
+    conn.commit()
+    conn.close()
+
+
+def get_youtube_config() -> Dict[str, str]:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT key, value FROM youtube_config")
+    rows = c.fetchall()
+    conn.close()
+    cfg = {row[0]: row[1] for row in rows}
+    # Fallback to environment variables if not stored in DB
+    if not cfg.get('client_id'):
+        cfg['client_id'] = os.getenv('YOUTUBE_CLIENT_ID', '')
+    if not cfg.get('client_secret'):
+        cfg['client_secret'] = os.getenv('YOUTUBE_CLIENT_SECRET', '')
+    if not cfg.get('redirect_uri'):
+        cfg['redirect_uri'] = os.getenv('YOUTUBE_REDIRECT_URI', 'http://localhost:8000/api/youtube/callback')
+    return cfg
+
+
+def save_youtube_token(channel_id: str, channel_title: str, channel_avatar: str, token_data: Dict[str, Any]):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    # Reset other channels as non-default
+    c.execute("UPDATE youtube_tokens SET is_default=0")
+    token_str = json.dumps(token_data)
+    c.execute('''
+        INSERT OR REPLACE INTO youtube_tokens (channel_id, channel_title, channel_avatar, token_json, is_default, updated_at)
+        VALUES (?, ?, ?, ?, 1, datetime('now'))
+    ''', (channel_id, channel_title, channel_avatar, token_str))
+    conn.commit()
+    conn.close()
+
+
+def get_youtube_token(channel_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if channel_id:
+        c.execute("SELECT * FROM youtube_tokens WHERE channel_id=?", (channel_id,))
+    else:
+        c.execute("SELECT * FROM youtube_tokens WHERE is_default=1 LIMIT 1")
+    row = c.fetchone()
+    conn.close()
+
+    if row:
+        token_info = dict(row)
+        try:
+            token_info['token'] = json.loads(token_info['token_json'])
+        except Exception:
+            token_info['token'] = {}
+        return token_info
+    return None
+
+
+def delete_youtube_token(channel_id: Optional[str] = None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    if channel_id:
+        c.execute("DELETE FROM youtube_tokens WHERE channel_id=?", (channel_id,))
+    else:
+        c.execute("DELETE FROM youtube_tokens")
+    conn.commit()
+    conn.close()
+
+
+def record_published_video(
+    job_id: str,
+    clip_path: str,
+    youtube_video_id: str,
+    youtube_url: str,
+    title: str,
+    description: str,
+    privacy_status: str,
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    import uuid
+    record_id = str(uuid.uuid4())
+    c.execute('''
+        INSERT INTO published_videos (id, job_id, clip_path, youtube_video_id, youtube_url, title, description, privacy_status, published_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ''', (record_id, job_id, clip_path, youtube_video_id, youtube_url, title, description, privacy_status))
+    conn.commit()
+    conn.close()
+    return record_id
+
+
+def get_published_videos(job_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if job_id:
+        c.execute("SELECT * FROM published_videos WHERE job_id=? ORDER BY published_at DESC", (job_id,))
+    else:
+        c.execute("SELECT * FROM published_videos ORDER BY published_at DESC LIMIT 50")
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+

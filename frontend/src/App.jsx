@@ -5,7 +5,8 @@ import {
   UploadCloud, Scissors, RefreshCw, Download, CheckCircle, Video,
   Type, Share2, Sparkles, Layers, Plus, Minus, RotateCcw, Film,
   Zap, Brain, MessageSquare, Copy, Check, ChevronDown, ChevronUp,
-  Sliders, Hash, Compass, Lightbulb, Play
+  Sliders, Hash, Compass, Lightbulb, Play, ExternalLink, X, Settings,
+  AlertCircle, Send
 } from 'lucide-react';
 import axios from 'axios';
 
@@ -58,7 +59,51 @@ function App() {
   const [expandedKit,     setExpandedKit]     = useState({});
   const [geminiInfo,      setGeminiInfo]      = useState({ available: true, model: 'gemini-3.7-flash' });
 
-  // Fetch Gemini status on initial mount
+  // YouTube Channel Linking & Publishing State
+  const [youtubeStatus, setYoutubeStatus] = useState({
+    configured: false,
+    connected: false,
+    channel: null,
+    client_id_preview: '',
+    redirect_uri: 'http://localhost:8000/api/youtube/callback',
+  });
+  const [showYoutubeConfigModal, setShowYoutubeConfigModal] = useState(false);
+  const [youtubeConfigForm, setYoutubeConfigForm] = useState({ clientId: '', clientSecret: '' });
+
+  // Publishing Modal State
+  const [publishingClip, setPublishingClip] = useState(null);
+  const [publishForm, setPublishForm] = useState({
+    title: '',
+    description: '',
+    tags: '',
+    privacyStatus: 'public',
+  });
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishResult, setPublishResult] = useState(null);
+  const [publishError, setPublishError] = useState('');
+
+  // Fetch YouTube status
+  const fetchYoutubeStatus = useCallback(() => {
+    axios.get(`${API_URL}/youtube/status`)
+      .then(res => {
+        if (res.data) setYoutubeStatus(res.data);
+      })
+      .catch(err => console.error('Failed to fetch YouTube status:', err));
+  }, []);
+
+  // Listen for OAuth completion message from popup
+  useEffect(() => {
+    const handleMessage = (event) => {
+      if (event.data?.type === 'YOUTUBE_AUTH_SUCCESS') {
+        fetchYoutubeStatus();
+        setShowYoutubeConfigModal(false);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [fetchYoutubeStatus]);
+
+  // Fetch initial statuses on mount
   useEffect(() => {
     axios.get(`${API_URL}/gemini/status`)
       .then(res => {
@@ -69,11 +114,10 @@ function App() {
           });
         }
       })
-      .catch(() => {
-        // Fallback default
-        setGeminiInfo({ available: true, model: 'gemini-3.7-flash' });
-      });
-  }, []);
+      .catch(() => setGeminiInfo({ available: true, model: 'gemini-3.7-flash' }));
+
+    fetchYoutubeStatus();
+  }, [fetchYoutubeStatus]);
 
   // Destination toggle
   const toggleDestination = (id) =>
@@ -133,7 +177,6 @@ function App() {
   useEffect(() => {
     if (!jobId) return;
 
-    let stopPolling = false;
     const interval = setInterval(async () => {
       try {
         const res  = await axios.get(`${API_URL}/status/${jobId}`);
@@ -158,10 +201,7 @@ function App() {
       }
     }, 1800);
 
-    return () => {
-      stopPolling = true;
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, [jobId]);
 
   // Handle trimming updates in Review Studio
@@ -197,7 +237,6 @@ function App() {
         font: selectedFont,
         destinations: selectedDestinations.join(','),
       });
-      // The status will transition to 'rendering' via polling
     } catch (err) {
       setError('Failed to queue render. Please check the backend server.');
     } finally {
@@ -241,6 +280,115 @@ function App() {
     }
   };
 
+  // ── YouTube Authentication Handlers ──
+  const handleConnectYoutube = async () => {
+    if (!youtubeStatus.configured) {
+      setShowYoutubeConfigModal(true);
+      return;
+    }
+
+    try {
+      const res = await axios.get(`${API_URL}/youtube/auth-url`);
+      if (res.data?.auth_url) {
+        const width = 580;
+        const height = 680;
+        const left = window.screen.width / 2 - width / 2;
+        const top = window.screen.height / 2 - height / 2;
+        window.open(
+          res.data.auth_url,
+          'youtube_oauth_popup',
+          `width=${width},height=${height},top=${top},left=${left}`
+        );
+      }
+    } catch (err) {
+      setShowYoutubeConfigModal(true);
+    }
+  };
+
+  const handleSaveYoutubeConfig = async () => {
+    if (!youtubeConfigForm.clientId || !youtubeConfigForm.clientSecret) return;
+    try {
+      await axios.post(`${API_URL}/youtube/configure`, {
+        client_id: youtubeConfigForm.clientId.trim(),
+        client_secret: youtubeConfigForm.clientSecret.trim(),
+      });
+      fetchYoutubeStatus();
+      setShowYoutubeConfigModal(false);
+      // Immediately open auth URL
+      setTimeout(() => handleConnectYoutube(), 500);
+    } catch (err) {
+      alert('Failed to save credentials: ' + (err.response?.data?.detail || err.message));
+    }
+  };
+
+  const handleDisconnectYoutube = async () => {
+    if (!confirm('Unlink this YouTube channel from Auto Shorts?')) return;
+    try {
+      await axios.post(`${API_URL}/youtube/disconnect`);
+      fetchYoutubeStatus();
+    } catch (err) {
+      console.error('Failed to unlink channel:', err);
+    }
+  };
+
+  // ── YouTube 1-Click Publishing Handlers ──
+  const handleOpenPublishModal = (clip) => {
+    const rawTitle = clip.title || 'Viral Short';
+    const formattedTitle = rawTitle.includes('#Shorts') ? rawTitle : `${rawTitle} #Shorts`;
+
+    // Try finding matching candidate metadata for rich social kit
+    const matchedCandidate = editedCandidates.find(c => c.title === clip.title || c.id === clip.id);
+    const socialKit = matchedCandidate?.social_kit || clip.social_kit;
+
+    const desc = socialKit?.caption
+      ? `${socialKit.caption}\n\n${socialKit.hashtags?.join(' ') || ''}\n\n#Shorts #YouTubeShorts`
+      : `Watch this high impact short!\n\n#Shorts #Viral`;
+
+    const tagList = socialKit?.hashtags
+      ? socialKit.hashtags.map(t => t.replace('#', '')).join(', ')
+      : 'Shorts, Viral, Trending';
+
+    setPublishForm({
+      title: formattedTitle.slice(0, 100),
+      description: desc,
+      tags: tagList,
+      privacyStatus: 'public',
+    });
+    setPublishingClip(clip);
+    setPublishResult(null);
+    setPublishError('');
+  };
+
+  const handlePublishToYoutube = async () => {
+    if (!publishingClip) return;
+    const clipP = clipPath(publishingClip) || publishingClip.preview_url || publishingClip.path;
+    if (!clipP) {
+      setPublishError('Could not find video file path.');
+      return;
+    }
+
+    try {
+      setIsPublishing(true);
+      setPublishError('');
+      const tagsArray = publishForm.tags.split(',').map(t => t.trim()).filter(Boolean);
+
+      const res = await axios.post(`${API_URL}/youtube/publish`, {
+        clip_path: clipP,
+        title: publishForm.title,
+        description: publishForm.description,
+        tags: tagsArray,
+        privacy_status: publishForm.privacyStatus,
+        job_id: jobId || '',
+      });
+
+      setPublishResult(res.data);
+    } catch (err) {
+      setPublishError(err.response?.data?.detail || 'Failed to publish video to YouTube. Check backend logs.');
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
   const isReviewStage = jobStatus?.status === 'review_ready';
   const isRenderingStage = jobStatus?.status === 'rendering' || jobStatus?.status === 'queued_for_render';
   const isCompletedStage = jobStatus?.status === 'completed';
@@ -257,26 +405,68 @@ function App() {
 
       <div className="container mx-auto px-6 py-12 max-w-7xl relative z-10">
 
-        {/* ── Top Header & Gemini Status Badge ── */}
+        {/* ── Top Header & Integration Badges ── */}
         <header className="text-center mb-12">
-          <motion.div
-            initial={{ scale: 0.9, opacity: 0 }}
-            animate={{ scale: 1,   opacity: 1 }}
-            transition={{ duration: 0.5 }}
-            className="inline-flex items-center gap-3 px-5 py-2 rounded-full bg-slate-900/80 border border-purple-500/30 backdrop-blur-md mb-5 shadow-[0_0_20px_rgba(168,85,247,0.15)]"
-          >
-            <Sparkles className="w-4 h-4 text-purple-400 animate-pulse" />
-            <span className="text-xs sm:text-sm font-semibold tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-purple-300 via-pink-300 to-indigo-300">
-              Google Gemini 3.7 Flash Active
-            </span>
-            <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
-          </motion.div>
+          <div className="flex flex-wrap items-center justify-center gap-3.5 mb-5">
+            {/* Gemini Status Badge */}
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1,   opacity: 1 }}
+              transition={{ duration: 0.5 }}
+              className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-slate-900/80 border border-purple-500/30 backdrop-blur-md shadow-[0_0_20px_rgba(168,85,247,0.15)]"
+            >
+              <Sparkles className="w-4 h-4 text-purple-400 animate-pulse" />
+              <span className="text-xs sm:text-sm font-semibold tracking-wide bg-clip-text text-transparent bg-gradient-to-r from-purple-300 via-pink-300 to-indigo-300">
+                Google Gemini 3.7 Flash Active
+              </span>
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
+            </motion.div>
+
+            {/* YouTube Channel Badge / Connect Button */}
+            {youtubeStatus.connected && youtubeStatus.channel ? (
+              <motion.div
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1,   opacity: 1 }}
+                className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-slate-900/80 border border-red-500/40 backdrop-blur-md shadow-[0_0_20px_rgba(239,68,68,0.15)]"
+              >
+                {youtubeStatus.channel.avatar ? (
+                  <img
+                    src={youtubeStatus.channel.avatar}
+                    alt={youtubeStatus.channel.title}
+                    className="w-5 h-5 rounded-full border border-red-400 object-cover"
+                  />
+                ) : (
+                  <Video className="w-4 h-4 text-red-500" />
+                )}
+                <span className="text-xs sm:text-sm font-bold text-slate-200">
+                  {youtubeStatus.channel.title}
+                </span>
+                <button
+                  onClick={handleDisconnectYoutube}
+                  title="Unlink YouTube Channel"
+                  className="text-slate-400 hover:text-red-400 ml-1 transition-colors cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </motion.div>
+            ) : (
+              <motion.button
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ scale: 1,   opacity: 1 }}
+                onClick={handleConnectYoutube}
+                className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 text-red-300 hover:text-white transition-all text-xs sm:text-sm font-bold shadow-[0_0_20px_rgba(239,68,68,0.15)] cursor-pointer"
+              >
+                <Video className="w-4 h-4 text-red-500" />
+                <span>Link YouTube Channel</span>
+              </motion.button>
+            )}
+          </div>
 
           <h1 className="text-5xl sm:text-6xl font-black mb-4 tracking-tight leading-tight">
             Auto <span className="bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-indigo-500 to-purple-500">Shorts</span>
           </h1>
           <p className="text-slate-400 text-lg sm:text-xl max-w-2xl mx-auto leading-relaxed">
-            Multi-modal viral hook detection powered by Gemini Chain-of-Thought AI, RMS audio energy profiling, and automated face tracking.
+            Multi-modal viral hook detection powered by Gemini Chain-of-Thought AI, RMS audio energy profiling, and 1-click publishing to YouTube Shorts.
           </p>
         </header>
 
@@ -511,7 +701,6 @@ function App() {
             animate={{ opacity: 1, scale: 1 }}
             className="max-w-2xl mx-auto bg-slate-900/80 backdrop-blur-xl border border-indigo-500/30 rounded-3xl p-10 shadow-[0_0_50px_rgba(99,102,241,0.15)] relative overflow-hidden text-center"
           >
-            {/* Top progress bar */}
             <div className="absolute top-0 left-0 w-full h-1.5 bg-slate-800">
               <motion.div
                 className="h-full bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500"
@@ -570,7 +759,7 @@ function App() {
                   Gemini Identified {editedCandidates.length} Viral Segments
                 </h2>
                 <p className="text-slate-400 text-sm mt-1">
-                  Preview 360p cuts, fine-tune timestamps, explore AI virality metrics, and copy ready-to-post social media kits.
+                  Preview 360p cuts, fine-tune timestamps, explore AI virality metrics, and publish directly to YouTube Shorts.
                 </p>
               </div>
 
@@ -759,7 +948,7 @@ function App() {
                           </div>
                         </div>
 
-                        {/* Social Media Kit Accordion */}
+                        {/* Social Media Kit Accordion & Direct YouTube Button */}
                         {candidate.social_kit && (
                           <div className="border border-slate-800 rounded-2xl overflow-hidden bg-slate-950/40">
                             <button
@@ -901,7 +1090,7 @@ function App() {
                   Your Shorts Are Ready to Publish!
                 </h2>
                 <p className="text-slate-400 text-sm mt-1">
-                  High-definition shorts formatted for TikTok, YouTube Shorts, and Instagram Reels with burned karaoke captions.
+                  High-definition shorts formatted with burned karaoke captions. Post directly to your linked YouTube channel with 1-click.
                 </p>
               </div>
 
@@ -967,14 +1156,22 @@ function App() {
                         <p className="text-xs text-slate-500 font-mono">Optimized for {dest}</p>
                       </div>
 
-                      <div className="mt-4 pt-4 border-t border-slate-800/80 flex items-center justify-between">
+                      {/* Card Actions: Download + 1-Click Post to YouTube */}
+                      <div className="mt-5 pt-4 border-t border-slate-800/80 flex items-center justify-between gap-2">
                         <a
                           href={`${BACKEND_URL}/${path}`}
                           download
-                          className="text-xs text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1.5"
+                          className="text-xs text-slate-400 hover:text-slate-200 font-semibold flex items-center gap-1.5"
                         >
-                          <Download className="w-3.5 h-3.5" /> Download Video
+                          <Download className="w-3.5 h-3.5" /> Save
                         </a>
+
+                        <button
+                          onClick={() => handleOpenPublishModal(clip)}
+                          className="px-3.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-[0_0_15px_rgba(239,68,68,0.35)] hover:scale-105 transition-all cursor-pointer"
+                        >
+                          <Video className="w-3.5 h-3.5" /> Post to YouTube
+                        </button>
                       </div>
                     </div>
                   </motion.div>
@@ -985,6 +1182,276 @@ function App() {
         )}
 
       </div>
+
+      {/* ── MODAL: YOUTUBE OAUTH CREDENTIALS SETUP ── */}
+      <AnimatePresence>
+        {showYoutubeConfigModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-[0_0_60px_rgba(0,0,0,0.8)] relative"
+            >
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-xl font-bold text-white flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-500">
+                    <Video className="w-4 h-4" />
+                  </div>
+                  Link YouTube Channel
+                </h3>
+                <button
+                  onClick={() => setShowYoutubeConfigModal(false)}
+                  className="text-slate-500 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-4 text-xs">
+                <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800/90 space-y-2 text-slate-300 leading-relaxed">
+                  <p className="font-bold text-indigo-300">Quick Google Cloud Setup (Project 242796880153):</p>
+                  <ol className="list-decimal list-inside space-y-1.5 text-slate-400">
+                    <li>Enable <b>YouTube Data API v3</b> in Google Cloud Console.</li>
+                    <li>Go to <b>APIs & Services &gt; Credentials &gt; Create Credentials &gt; OAuth client ID</b>.</li>
+                    <li>Application type: <b>Web application</b>.</li>
+                    <li>
+                      Authorized redirect URI:{' '}
+                      <code className="bg-slate-900 px-1.5 py-0.5 rounded text-pink-300 font-mono text-[11px]">
+                        {youtubeStatus.redirect_uri || 'http://localhost:8000/api/youtube/callback'}
+                      </code>
+                    </li>
+                    <li>Paste your Client ID and Client Secret below:</li>
+                  </ol>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">OAuth Client ID</label>
+                  <input
+                    type="text"
+                    placeholder="xxxxxx.apps.googleusercontent.com"
+                    value={youtubeConfigForm.clientId}
+                    onChange={(e) => setYoutubeConfigForm(f => ({ ...f, clientId: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">OAuth Client Secret</label>
+                  <input
+                    type="password"
+                    placeholder="GOCSPX-xxxxxx"
+                    value={youtubeConfigForm.clientSecret}
+                    onChange={(e) => setYoutubeConfigForm(f => ({ ...f, clientSecret: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-mono"
+                  />
+                </div>
+
+                <div className="pt-2 flex gap-3">
+                  <button
+                    onClick={() => setShowYoutubeConfigModal(false)}
+                    className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSaveYoutubeConfig}
+                    disabled={!youtubeConfigForm.clientId || !youtubeConfigForm.clientSecret}
+                    className="flex-1 py-3 bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition-all shadow-[0_0_20px_rgba(239,68,68,0.3)] cursor-pointer"
+                  >
+                    Save & Authorize
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── MODAL: 1-CLICK POST TO YOUTUBE SHORTS ── */}
+      <AnimatePresence>
+        {publishingClip && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-red-500/30 rounded-3xl p-6 sm:p-8 max-w-xl w-full shadow-[0_0_60px_rgba(239,68,68,0.15)] relative max-h-[90vh] overflow-y-auto"
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between mb-5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-500">
+                    <Video className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold text-white">Post to YouTube Shorts</h3>
+                    <p className="text-xs text-slate-400">Publish high-reach title & viral description directly</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setPublishingClip(null)}
+                  className="text-slate-500 hover:text-white transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Connected Channel Display */}
+              {youtubeStatus.connected && youtubeStatus.channel ? (
+                <div className="flex items-center gap-3 p-3 bg-slate-950/80 border border-slate-800 rounded-2xl mb-5">
+                  {youtubeStatus.channel.avatar ? (
+                    <img src={youtubeStatus.channel.avatar} className="w-9 h-9 rounded-full border border-red-400 object-cover" />
+                  ) : (
+                    <Video className="w-6 h-6 text-red-500" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Publishing to Channel:</span>
+                    <p className="text-sm font-bold text-white truncate">{youtubeStatus.channel.title}</p>
+                  </div>
+                  <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/30">
+                    Connected
+                  </span>
+                </div>
+              ) : (
+                <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl mb-5 text-xs text-amber-300 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Connect your YouTube channel before posting.</span>
+                  </div>
+                  <button
+                    onClick={() => { setPublishingClip(null); handleConnectYoutube(); }}
+                    className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-xs cursor-pointer shrink-0"
+                  >
+                    Connect
+                  </button>
+                </div>
+              )}
+
+              {/* SUCCESS STATE */}
+              {publishResult ? (
+                <div className="text-center py-6 space-y-4">
+                  <div className="w-14 h-14 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto shadow-[0_0_30px_rgba(16,185,129,0.3)]">
+                    <CheckCircle className="w-8 h-8" />
+                  </div>
+                  <h4 className="text-2xl font-black text-white">Short Published Successfully!</h4>
+                  <p className="text-xs text-slate-300 max-w-sm mx-auto">
+                    Your video is live on YouTube. Click below to view the Short in your browser.
+                  </p>
+
+                  <div className="pt-2 flex flex-col sm:flex-row gap-3 justify-center">
+                    <a
+                      href={publishResult.youtube_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(239,68,68,0.4)]"
+                    >
+                      <ExternalLink className="w-4 h-4" /> Open on YouTube Shorts
+                    </a>
+                    <button
+                      onClick={() => setPublishingClip(null)}
+                      className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* FORM INPUTS */
+                <div className="space-y-4 text-xs">
+                  {/* Title */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="font-bold text-slate-300">Video Title (Auto-appends #Shorts):</label>
+                      <span className={`font-mono text-[11px] ${publishForm.title.length > 95 ? 'text-amber-400' : 'text-slate-500'}`}>
+                        {publishForm.title.length}/100
+                      </span>
+                    </div>
+                    <input
+                      type="text"
+                      maxLength={100}
+                      value={publishForm.title}
+                      onChange={(e) => setPublishForm(f => ({ ...f, title: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-medium"
+                    />
+                  </div>
+
+                  {/* Description */}
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">Description (AI Caption & Call-to-Action):</label>
+                    <textarea
+                      rows={4}
+                      value={publishForm.description}
+                      onChange={(e) => setPublishForm(f => ({ ...f, description: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-red-500 font-normal leading-relaxed"
+                    />
+                  </div>
+
+                  {/* Tags */}
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">Tags (Comma-separated):</label>
+                    <input
+                      type="text"
+                      value={publishForm.tags}
+                      onChange={(e) => setPublishForm(f => ({ ...f, tags: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-red-500 font-mono"
+                    />
+                  </div>
+
+                  {/* Privacy Status */}
+                  <div>
+                    <label className="block font-bold text-slate-300 mb-1">Privacy Status:</label>
+                    <div className="grid grid-cols-3 gap-2.5">
+                      {['public', 'unlisted', 'private'].map(p => (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={() => setPublishForm(f => ({ ...f, privacyStatus: p }))}
+                          className={`py-2 px-3 rounded-xl border text-center capitalize font-semibold transition-all cursor-pointer ${
+                            publishForm.privacyStatus === p
+                              ? 'bg-red-500/20 border-red-500 text-white'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {publishError && (
+                    <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs">
+                      {publishError}
+                    </div>
+                  )}
+
+                  {/* Submit Button */}
+                  <div className="pt-2">
+                    <button
+                      onClick={handlePublishToYoutube}
+                      disabled={isPublishing || !youtubeStatus.connected}
+                      className="w-full py-3.5 bg-gradient-to-r from-red-600 to-pink-600 hover:shadow-[0_0_30px_rgba(239,68,68,0.4)] disabled:opacity-50 text-white font-bold rounded-xl text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+                    >
+                      {isPublishing ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          Uploading to YouTube...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-4 h-4" />
+                          Post Short Now
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
     </div>
   );
 }
