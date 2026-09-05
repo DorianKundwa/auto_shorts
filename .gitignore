@@ -18,3 +18,4 @@ fonts/
 .env.*
 backend/.env
 backend/.env.*
+!backend/.env.example

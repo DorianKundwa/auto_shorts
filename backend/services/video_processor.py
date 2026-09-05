@@ -119,12 +119,14 @@ def render_clip(
     output_path:      str,
     font_name:        str   = "Montserrat-Black.ttf",
     destination:      str   = "TikTok",
+    highlight_words:  list  = None,
 ):
     """
     Render a single short with:
       • Face-detection-aware blurred background crop
       • Word-by-word karaoke captions (each word timed to its spoken duration)
-        with a semi-transparent pill background for contrast on any scene
+        with dynamic neon highlighting for Gemini-detected power words
+      • Semi-transparent pill background for maximum readability on any scene
     """
     clip        = None
     fitted_clip = None
@@ -152,11 +154,14 @@ def render_clip(
             print(f"[WARN] Font '{font_name}' not found — falling back to Arial.")
             font_path = "Arial"
 
-        # ── Karaoke (word-by-word) captions ──────────────────────────────
-        # Every word gets its own TextClip timed to its Whisper timestamp.
-        # A fixed-size semi-transparent pill sits behind each word for
-        # readability on any background.  This matches the dominant caption
-        # style used by viral TikTok / Shorts content.
+        # ── Karaoke (word-by-word) captions with Gemini power word highlights ──
+        norm_highlights = set()
+        if highlight_words:
+            for hw in highlight_words:
+                cleaned = "".join(c for c in str(hw).upper() if c.isalnum())
+                if cleaned:
+                    norm_highlights.add(cleaned)
+
         text_clips = []
         font_size  = max(48, int(bg_width * 0.088))   # ~63 px at 720 w
         caption_cy = int(fitted_clip.h * 0.76)        # vertical centre of caption band
@@ -173,10 +178,19 @@ def render_clip(
             if rel_end - rel_start < 0.04:            # skip whisper artefacts < 40 ms
                 continue
 
+            clean_word = "".join(c for c in word_text if c.isalnum())
+            is_highlight = clean_word in norm_highlights
+
+            word_color = "#FFE600" if is_highlight else "white"
+            stroke_w = 4 if is_highlight else 3
+            current_font_size = int(font_size * 1.08) if is_highlight else font_size
+            pill_color = (25, 20, 0) if is_highlight else (10, 10, 10)
+            pill_opacity = 0.72 if is_highlight else 0.58
+
             # Dark semi-transparent pill background
             pill = (
-                ColorClip(size=(pill_w, pill_h), color=(10, 10, 10))
-                .with_opacity(0.58)
+                ColorClip(size=(pill_w, pill_h), color=pill_color)
+                .with_opacity(pill_opacity)
                 .with_position(("center", pill_top))
                 .with_start(rel_start)
                 .with_end(rel_end)
@@ -186,10 +200,10 @@ def render_clip(
             txt = TextClip(
                 text=word_text,
                 font=font_path,
-                font_size=font_size,
-                color="white",
+                font_size=current_font_size,
+                color=word_color,
                 stroke_color="black",
-                stroke_width=3,
+                stroke_width=stroke_w,
                 method="caption",
                 size=(int(bg_width * 0.80), None),
                 text_align="center",
