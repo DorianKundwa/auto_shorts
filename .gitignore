@@ -19,3 +19,5 @@ fonts/
 backend/.env
 backend/.env.*
 !backend/.env.example
+*.db
+backend/*.db

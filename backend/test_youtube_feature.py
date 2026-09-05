@@ -30,6 +30,7 @@ def run_tests():
             print(f"  [FAIL] {name}" + (f" -> {extra}" if extra else ""))
 
     existing_cfg = get_youtube_config()
+    existing_token = get_youtube_token()
 
     def cleanup_test_artifacts():
         import sqlite3
@@ -54,6 +55,15 @@ def run_tests():
             conn.close()
         except Exception as e:
             print(f"Restore warning: {e}")
+
+        # Restore connected channel if one was previously authenticated
+        if existing_token:
+            save_youtube_token(
+                existing_token["channel_id"],
+                existing_token["channel_title"],
+                existing_token["channel_avatar"],
+                existing_token["token"]
+            )
 
     cleanup_test_artifacts()
 
