@@ -53,6 +53,61 @@ def init_db():
             value TEXT
         )
     ''')
+    # ─── TikTok tables ───────────────────────────────────────────────────────
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS tiktok_tokens (
+            open_id       TEXT PRIMARY KEY,
+            display_name  TEXT,
+            username      TEXT,
+            avatar_url    TEXT,
+            token_json    TEXT,
+            is_default    INTEGER DEFAULT 1,
+            updated_at    TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS tiktok_config (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+
+    # ─── Instagram tables ────────────────────────────────────────────────────
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS instagram_tokens (
+            ig_user_id TEXT PRIMARY KEY,
+            username   TEXT,
+            name       TEXT,
+            avatar     TEXT,
+            page_token TEXT,
+            token_json TEXT,
+            is_default INTEGER DEFAULT 1,
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS instagram_config (
+            key   TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+
+    # ─── Social posts table (multi-platform publish history) ─────────────────
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS social_posts (
+            id          TEXT PRIMARY KEY,
+            job_id      TEXT,
+            clip_path   TEXT,
+            platform    TEXT,
+            post_id     TEXT,
+            post_url    TEXT,
+            title       TEXT,
+            caption     TEXT,
+            privacy     TEXT,
+            published_at TEXT DEFAULT (datetime('now'))
+        )
+    ''')
+
     # Migrations for existing databases
     try:
         c.execute("ALTER TABLE jobs ADD COLUMN created_at TEXT")
@@ -277,6 +332,209 @@ def get_published_videos(job_id: Optional[str] = None) -> List[Dict[str, Any]]:
         c.execute("SELECT * FROM published_videos WHERE job_id=? ORDER BY published_at DESC", (job_id,))
     else:
         c.execute("SELECT * FROM published_videos ORDER BY published_at DESC LIMIT 50")
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ─── TikTok Config & Token Helpers ────────────────────────────────────────────
+
+def save_tiktok_config(app_key: str, app_secret: str, redirect_uri: Optional[str] = None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO tiktok_config (key, value) VALUES ('app_key', ?)", (app_key,))
+    c.execute("INSERT OR REPLACE INTO tiktok_config (key, value) VALUES ('app_secret', ?)", (app_secret,))
+    if redirect_uri:
+        c.execute("INSERT OR REPLACE INTO tiktok_config (key, value) VALUES ('redirect_uri', ?)", (redirect_uri,))
+    conn.commit()
+    conn.close()
+
+
+def get_tiktok_config() -> Dict[str, str]:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT key, value FROM tiktok_config")
+    rows = c.fetchall()
+    conn.close()
+    cfg = {row[0]: row[1] for row in rows}
+    if not cfg.get('app_key'):
+        cfg['app_key'] = os.getenv('TIKTOK_APP_KEY', '')
+    if not cfg.get('app_secret'):
+        cfg['app_secret'] = os.getenv('TIKTOK_APP_SECRET', '')
+    if not cfg.get('redirect_uri'):
+        cfg['redirect_uri'] = os.getenv('TIKTOK_REDIRECT_URI', 'http://localhost:8000/api/tiktok/callback')
+    return cfg
+
+
+def save_tiktok_token(
+    open_id:      str,
+    display_name: str,
+    username:     str,
+    avatar_url:   str,
+    token_data:   Dict[str, Any],
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE tiktok_tokens SET is_default=0")
+    c.execute('''
+        INSERT OR REPLACE INTO tiktok_tokens
+            (open_id, display_name, username, avatar_url, token_json, is_default, updated_at)
+        VALUES (?, ?, ?, ?, ?, 1, datetime('now'))
+    ''', (open_id, display_name, username, avatar_url, json.dumps(token_data)))
+    conn.commit()
+    conn.close()
+
+
+def get_tiktok_token(open_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if open_id:
+        c.execute("SELECT * FROM tiktok_tokens WHERE open_id=?", (open_id,))
+    else:
+        c.execute("SELECT * FROM tiktok_tokens WHERE is_default=1 LIMIT 1")
+    row = c.fetchone()
+    conn.close()
+    if row:
+        info = dict(row)
+        try:
+            info['token'] = json.loads(info['token_json'])
+        except Exception:
+            info['token'] = {}
+        return info
+    return None
+
+
+def delete_tiktok_token(open_id: Optional[str] = None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    if open_id:
+        c.execute("DELETE FROM tiktok_tokens WHERE open_id=?", (open_id,))
+    else:
+        c.execute("DELETE FROM tiktok_tokens")
+    conn.commit()
+    conn.close()
+
+
+# ─── Instagram Config & Token Helpers ─────────────────────────────────────────
+
+def save_instagram_config(app_id: str, app_secret: str, redirect_uri: Optional[str] = None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO instagram_config (key, value) VALUES ('app_id', ?)", (app_id,))
+    c.execute("INSERT OR REPLACE INTO instagram_config (key, value) VALUES ('app_secret', ?)", (app_secret,))
+    if redirect_uri:
+        c.execute("INSERT OR REPLACE INTO instagram_config (key, value) VALUES ('redirect_uri', ?)", (redirect_uri,))
+    conn.commit()
+    conn.close()
+
+
+def get_instagram_config() -> Dict[str, str]:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT key, value FROM instagram_config")
+    rows = c.fetchall()
+    conn.close()
+    cfg = {row[0]: row[1] for row in rows}
+    if not cfg.get('app_id'):
+        cfg['app_id'] = os.getenv('META_APP_ID', '')
+    if not cfg.get('app_secret'):
+        cfg['app_secret'] = os.getenv('META_APP_SECRET', '')
+    if not cfg.get('redirect_uri'):
+        cfg['redirect_uri'] = os.getenv('INSTAGRAM_REDIRECT_URI', 'http://localhost:8000/api/instagram/callback')
+    return cfg
+
+
+def save_instagram_token(
+    ig_user_id: str,
+    username:   str,
+    name:       str,
+    avatar:     str,
+    page_token: str,
+    token_data: Dict[str, Any],
+):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE instagram_tokens SET is_default=0")
+    c.execute('''
+        INSERT OR REPLACE INTO instagram_tokens
+            (ig_user_id, username, name, avatar, page_token, token_json, is_default, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 1, datetime('now'))
+    ''', (ig_user_id, username, name, avatar, page_token, json.dumps(token_data)))
+    conn.commit()
+    conn.close()
+
+
+def get_instagram_token(ig_user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    if ig_user_id:
+        c.execute("SELECT * FROM instagram_tokens WHERE ig_user_id=?", (ig_user_id,))
+    else:
+        c.execute("SELECT * FROM instagram_tokens WHERE is_default=1 LIMIT 1")
+    row = c.fetchone()
+    conn.close()
+    if row:
+        info = dict(row)
+        try:
+            info['token'] = json.loads(info['token_json'])
+        except Exception:
+            info['token'] = {}
+        return info
+    return None
+
+
+def delete_instagram_token(ig_user_id: Optional[str] = None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    if ig_user_id:
+        c.execute("DELETE FROM instagram_tokens WHERE ig_user_id=?", (ig_user_id,))
+    else:
+        c.execute("DELETE FROM instagram_tokens")
+    conn.commit()
+    conn.close()
+
+
+# ─── Generic Social Post Record ────────────────────────────────────────────────
+
+def record_social_post(
+    job_id:    str,
+    clip_path: str,
+    platform:  str,
+    post_id:   str,
+    post_url:  str,
+    title:     str,
+    caption:   str,
+    privacy:   str,
+) -> str:
+    import uuid
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    record_id = str(uuid.uuid4())
+    c.execute('''
+        INSERT INTO social_posts (id, job_id, clip_path, platform, post_id, post_url, title, caption, privacy, published_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ''', (record_id, job_id, clip_path, platform, post_id, post_url, title, caption, privacy))
+    conn.commit()
+    conn.close()
+    return record_id
+
+
+def get_social_posts(job_id: Optional[str] = None, platform: Optional[str] = None) -> List[Dict[str, Any]]:
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    query  = "SELECT * FROM social_posts WHERE 1=1"
+    params: List[Any] = []
+    if job_id:
+        query  += " AND job_id=?"
+        params.append(job_id)
+    if platform:
+        query  += " AND platform=?"
+        params.append(platform)
+    query += " ORDER BY published_at DESC LIMIT 100"
+    c.execute(query, params)
     rows = c.fetchall()
     conn.close()
     return [dict(r) for r in rows]

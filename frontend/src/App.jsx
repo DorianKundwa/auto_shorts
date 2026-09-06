@@ -6,7 +6,7 @@ import {
   Type, Share2, Sparkles, Layers, Plus, Minus, RotateCcw, Film,
   Zap, Brain, MessageSquare, Copy, Check, ChevronDown, ChevronUp,
   Sliders, Hash, Compass, Lightbulb, Play, ExternalLink, X, Settings,
-  AlertCircle, Send
+  AlertCircle, Send, Music, Camera
 } from 'lucide-react';
 import axios from 'axios';
 
@@ -61,22 +61,34 @@ function App() {
 
   // YouTube Channel Linking & Publishing State
   const [youtubeStatus, setYoutubeStatus] = useState({
-    configured: false,
-    connected: false,
-    channel: null,
-    client_id_preview: '',
-    redirect_uri: 'http://localhost:8000/api/youtube/callback',
+    configured: false, connected: false, channel: null,
+    client_id_preview: '', redirect_uri: 'http://localhost:8000/api/youtube/callback',
   });
   const [showYoutubeConfigModal, setShowYoutubeConfigModal] = useState(false);
   const [youtubeConfigForm, setYoutubeConfigForm] = useState({ clientId: '', clientSecret: '' });
 
-  // Publishing Modal State
+  // TikTok Account Linking State
+  const [tiktokStatus, setTiktokStatus] = useState({
+    configured: false, connected: false, account: null,
+    redirect_uri: 'http://localhost:8000/api/tiktok/callback',
+  });
+  const [showTiktokConfigModal, setShowTiktokConfigModal] = useState(false);
+  const [tiktokConfigForm, setTiktokConfigForm] = useState({ appKey: '', appSecret: '' });
+
+  // Instagram Account Linking State
+  const [instagramStatus, setInstagramStatus] = useState({
+    configured: false, connected: false, account: null,
+    redirect_uri: 'http://localhost:8000/api/instagram/callback',
+  });
+  const [showInstagramConfigModal, setShowInstagramConfigModal] = useState(false);
+  const [instagramConfigForm, setInstagramConfigForm] = useState({ appId: '', appSecret: '' });
+
+  // Publishing Modal State — now multi-platform
   const [publishingClip, setPublishingClip] = useState(null);
+  const [publishPlatform, setPublishPlatform] = useState('youtube'); // 'youtube' | 'tiktok' | 'instagram'
   const [publishForm, setPublishForm] = useState({
-    title: '',
-    description: '',
-    tags: '',
-    privacyStatus: 'public',
+    title: '', description: '', tags: '', privacyStatus: 'public',
+    caption: '', tiktokPrivacy: 'PUBLIC_TO_EVERYONE',
   });
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishResult, setPublishResult] = useState(null);
@@ -85,39 +97,56 @@ function App() {
   // Fetch YouTube status
   const fetchYoutubeStatus = useCallback(() => {
     axios.get(`${API_URL}/youtube/status`)
-      .then(res => {
-        if (res.data) setYoutubeStatus(res.data);
-      })
+      .then(res => { if (res.data) setYoutubeStatus(res.data); })
       .catch(err => console.error('Failed to fetch YouTube status:', err));
   }, []);
 
-  // Listen for OAuth completion message from popup
+  const fetchTiktokStatus = useCallback(() => {
+    axios.get(`${API_URL}/tiktok/status`)
+      .then(res => { if (res.data) setTiktokStatus(res.data); })
+      .catch(err => console.error('Failed to fetch TikTok status:', err));
+  }, []);
+
+  const fetchInstagramStatus = useCallback(() => {
+    axios.get(`${API_URL}/instagram/status`)
+      .then(res => { if (res.data) setInstagramStatus(res.data); })
+      .catch(err => console.error('Failed to fetch Instagram status:', err));
+  }, []);
+
+  // Listen for OAuth completion messages from popups
   useEffect(() => {
     const handleMessage = (event) => {
       if (event.data?.type === 'YOUTUBE_AUTH_SUCCESS') {
         fetchYoutubeStatus();
         setShowYoutubeConfigModal(false);
       }
+      if (event.data?.type === 'TIKTOK_AUTH_SUCCESS') {
+        fetchTiktokStatus();
+        setShowTiktokConfigModal(false);
+      }
+      if (event.data?.type === 'INSTAGRAM_AUTH_SUCCESS') {
+        fetchInstagramStatus();
+        setShowInstagramConfigModal(false);
+      }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [fetchYoutubeStatus]);
+  }, [fetchYoutubeStatus, fetchTiktokStatus, fetchInstagramStatus]);
 
   // Fetch initial statuses on mount
   useEffect(() => {
     axios.get(`${API_URL}/gemini/status`)
       .then(res => {
         if (res.data) {
-          setGeminiInfo({
-            available: res.data.available,
-            model: res.data.active_model || 'gemini-3.7-flash'
-          });
+          setGeminiInfo({ available: res.data.available, model: res.data.active_model || 'gemini-3.7-flash' });
         }
       })
       .catch(() => setGeminiInfo({ available: true, model: 'gemini-3.7-flash' }));
 
     fetchYoutubeStatus();
-  }, [fetchYoutubeStatus]);
+    fetchTiktokStatus();
+    fetchInstagramStatus();
+  }, [fetchYoutubeStatus, fetchTiktokStatus, fetchInstagramStatus]);
 
   // Destination toggle
   const toggleDestination = (id) =>
@@ -282,61 +311,107 @@ function App() {
 
   // ── YouTube Authentication Handlers ──
   const handleConnectYoutube = async () => {
-    if (!youtubeStatus.configured) {
-      setShowYoutubeConfigModal(true);
-      return;
-    }
-
+    if (!youtubeStatus.configured) { setShowYoutubeConfigModal(true); return; }
     try {
       const res = await axios.get(`${API_URL}/youtube/auth-url`);
       if (res.data?.auth_url) {
-        const width = 580;
-        const height = 680;
+        const width = 580, height = 680;
         const left = window.screen.width / 2 - width / 2;
-        const top = window.screen.height / 2 - height / 2;
-        window.open(
-          res.data.auth_url,
-          'youtube_oauth_popup',
-          `width=${width},height=${height},top=${top},left=${left}`
-        );
+        const top  = window.screen.height / 2 - height / 2;
+        window.open(res.data.auth_url, 'youtube_oauth_popup', `width=${width},height=${height},top=${top},left=${left}`);
       }
-    } catch (err) {
-      setShowYoutubeConfigModal(true);
-    }
+    } catch (err) { setShowYoutubeConfigModal(true); }
   };
 
   const handleSaveYoutubeConfig = async () => {
     if (!youtubeConfigForm.clientId || !youtubeConfigForm.clientSecret) return;
     try {
       await axios.post(`${API_URL}/youtube/configure`, {
-        client_id: youtubeConfigForm.clientId.trim(),
+        client_id:     youtubeConfigForm.clientId.trim(),
         client_secret: youtubeConfigForm.clientSecret.trim(),
       });
       fetchYoutubeStatus();
       setShowYoutubeConfigModal(false);
-      // Immediately open auth URL
       setTimeout(() => handleConnectYoutube(), 500);
-    } catch (err) {
-      alert('Failed to save credentials: ' + (err.response?.data?.detail || err.message));
-    }
+    } catch (err) { alert('Failed to save credentials: ' + (err.response?.data?.detail || err.message)); }
   };
 
   const handleDisconnectYoutube = async () => {
     if (!confirm('Unlink this YouTube channel from Auto Shorts?')) return;
-    try {
-      await axios.post(`${API_URL}/youtube/disconnect`);
-      fetchYoutubeStatus();
-    } catch (err) {
-      console.error('Failed to unlink channel:', err);
-    }
+    try { await axios.post(`${API_URL}/youtube/disconnect`); fetchYoutubeStatus(); }
+    catch (err) { console.error('Failed to unlink channel:', err); }
   };
 
-  // ── YouTube 1-Click Publishing Handlers ──
-  const handleOpenPublishModal = (clip) => {
+  // ── TikTok Authentication Handlers ──
+  const handleConnectTiktok = async () => {
+    if (!tiktokStatus.configured) { setShowTiktokConfigModal(true); return; }
+    try {
+      const res = await axios.get(`${API_URL}/tiktok/auth-url`);
+      if (res.data?.auth_url) {
+        const width = 520, height = 720;
+        const left = window.screen.width / 2 - width / 2;
+        const top  = window.screen.height / 2 - height / 2;
+        window.open(res.data.auth_url, 'tiktok_oauth_popup', `width=${width},height=${height},top=${top},left=${left}`);
+      }
+    } catch (err) { setShowTiktokConfigModal(true); }
+  };
+
+  const handleSaveTiktokConfig = async () => {
+    if (!tiktokConfigForm.appKey || !tiktokConfigForm.appSecret) return;
+    try {
+      await axios.post(`${API_URL}/tiktok/configure`, {
+        app_key:    tiktokConfigForm.appKey.trim(),
+        app_secret: tiktokConfigForm.appSecret.trim(),
+      });
+      fetchTiktokStatus();
+      setShowTiktokConfigModal(false);
+      setTimeout(() => handleConnectTiktok(), 500);
+    } catch (err) { alert('Failed to save TikTok credentials: ' + (err.response?.data?.detail || err.message)); }
+  };
+
+  const handleDisconnectTiktok = async () => {
+    if (!confirm('Unlink this TikTok account from Auto Shorts?')) return;
+    try { await axios.post(`${API_URL}/tiktok/disconnect`); fetchTiktokStatus(); }
+    catch (err) { console.error('Failed to unlink TikTok:', err); }
+  };
+
+  // ── Instagram Authentication Handlers ──
+  const handleConnectInstagram = async () => {
+    if (!instagramStatus.configured) { setShowInstagramConfigModal(true); return; }
+    try {
+      const res = await axios.get(`${API_URL}/instagram/auth-url`);
+      if (res.data?.auth_url) {
+        const width = 580, height = 680;
+        const left = window.screen.width / 2 - width / 2;
+        const top  = window.screen.height / 2 - height / 2;
+        window.open(res.data.auth_url, 'instagram_oauth_popup', `width=${width},height=${height},top=${top},left=${left}`);
+      }
+    } catch (err) { setShowInstagramConfigModal(true); }
+  };
+
+  const handleSaveInstagramConfig = async () => {
+    if (!instagramConfigForm.appId || !instagramConfigForm.appSecret) return;
+    try {
+      await axios.post(`${API_URL}/instagram/configure`, {
+        app_id:     instagramConfigForm.appId.trim(),
+        app_secret: instagramConfigForm.appSecret.trim(),
+      });
+      fetchInstagramStatus();
+      setShowInstagramConfigModal(false);
+      setTimeout(() => handleConnectInstagram(), 500);
+    } catch (err) { alert('Failed to save Instagram credentials: ' + (err.response?.data?.detail || err.message)); }
+  };
+
+  const handleDisconnectInstagram = async () => {
+    if (!confirm('Unlink this Instagram account from Auto Shorts?')) return;
+    try { await axios.post(`${API_URL}/instagram/disconnect`); fetchInstagramStatus(); }
+    catch (err) { console.error('Failed to unlink Instagram:', err); }
+  };
+
+  // ── Multi-Platform Publishing Handlers ──
+  const handleOpenPublishModal = (clip, platform = 'youtube') => {
     const rawTitle = clip.title || 'Viral Short';
     const formattedTitle = rawTitle.includes('#Shorts') ? rawTitle : `${rawTitle} #Shorts`;
-
-    // Try finding matching candidate metadata for rich social kit
     const matchedCandidate = editedCandidates.find(c => c.title === clip.title || c.id === clip.id);
     const socialKit = matchedCandidate?.social_kit || clip.social_kit;
 
@@ -344,16 +419,23 @@ function App() {
       ? `${socialKit.caption}\n\n${socialKit.hashtags?.join(' ') || ''}\n\n#Shorts #YouTubeShorts`
       : `Watch this high impact short!\n\n#Shorts #Viral`;
 
+    const caption = socialKit?.caption
+      ? `${socialKit.caption}\n\n${socialKit.hashtags?.join(' ') || ''}\n\n#Shorts`
+      : `Check this out! 🔥\n\n#Shorts #Viral`;
+
     const tagList = socialKit?.hashtags
       ? socialKit.hashtags.map(t => t.replace('#', '')).join(', ')
       : 'Shorts, Viral, Trending';
 
     setPublishForm({
-      title: formattedTitle.slice(0, 100),
-      description: desc,
-      tags: tagList,
-      privacyStatus: 'public',
+      title:          formattedTitle.slice(0, 100),
+      description:    desc,
+      tags:           tagList,
+      privacyStatus:  'public',
+      caption:        caption.slice(0, 2200),
+      tiktokPrivacy:  'PUBLIC_TO_EVERYONE',
     });
+    setPublishPlatform(platform);
     setPublishingClip(clip);
     setPublishResult(null);
     setPublishError('');
@@ -362,31 +444,62 @@ function App() {
   const handlePublishToYoutube = async () => {
     if (!publishingClip) return;
     const clipP = clipPath(publishingClip) || publishingClip.preview_url || publishingClip.path;
-    if (!clipP) {
-      setPublishError('Could not find video file path.');
-      return;
-    }
-
+    if (!clipP) { setPublishError('Could not find video file path.'); return; }
     try {
-      setIsPublishing(true);
-      setPublishError('');
+      setIsPublishing(true); setPublishError('');
       const tagsArray = publishForm.tags.split(',').map(t => t.trim()).filter(Boolean);
-
       const res = await axios.post(`${API_URL}/youtube/publish`, {
-        clip_path: clipP,
-        title: publishForm.title,
-        description: publishForm.description,
-        tags: tagsArray,
-        privacy_status: publishForm.privacyStatus,
-        job_id: jobId || '',
+        clip_path: clipP, title: publishForm.title,
+        description: publishForm.description, tags: tagsArray,
+        privacy_status: publishForm.privacyStatus, job_id: jobId || '',
       });
-
-      setPublishResult(res.data);
+      setPublishResult({ platform: 'youtube', url: res.data.youtube_url, ...res.data });
     } catch (err) {
-      setPublishError(err.response?.data?.detail || 'Failed to publish video to YouTube. Check backend logs.');
-    } finally {
-      setIsPublishing(false);
-    }
+      setPublishError(err.response?.data?.detail || 'Failed to publish to YouTube.');
+    } finally { setIsPublishing(false); }
+  };
+
+  const handlePublishToTiktok = async () => {
+    if (!publishingClip) return;
+    const clipP = clipPath(publishingClip) || publishingClip.preview_url || publishingClip.path;
+    if (!clipP) { setPublishError('Could not find video file path.'); return; }
+    try {
+      setIsPublishing(true); setPublishError('');
+      const res = await axios.post(`${API_URL}/tiktok/publish`, {
+        clip_path:     clipP,
+        title:         publishForm.title.replace(' #Shorts', '').slice(0, 150),
+        caption:       publishForm.caption,
+        privacy_level: publishForm.tiktokPrivacy,
+        job_id:        jobId || '',
+      });
+      setPublishResult({ platform: 'tiktok', url: res.data.share_url, ...res.data });
+    } catch (err) {
+      setPublishError(err.response?.data?.detail || 'Failed to publish to TikTok.');
+    } finally { setIsPublishing(false); }
+  };
+
+  const handlePublishToInstagram = async () => {
+    if (!publishingClip) return;
+    const clipP = clipPath(publishingClip) || publishingClip.preview_url || publishingClip.path;
+    if (!clipP) { setPublishError('Could not find video file path.'); return; }
+    try {
+      setIsPublishing(true); setPublishError('');
+      const res = await axios.post(`${API_URL}/instagram/publish`, {
+        clip_path: clipP,
+        caption:   publishForm.caption,
+        title:     publishForm.title,
+        job_id:    jobId || '',
+      });
+      setPublishResult({ platform: 'instagram', url: res.data.permalink, ...res.data });
+    } catch (err) {
+      setPublishError(err.response?.data?.detail || 'Failed to publish to Instagram.');
+    } finally { setIsPublishing(false); }
+  };
+
+  const handlePublishSubmit = () => {
+    if (publishPlatform === 'youtube')   return handlePublishToYoutube();
+    if (publishPlatform === 'tiktok')    return handlePublishToTiktok();
+    if (publishPlatform === 'instagram') return handlePublishToInstagram();
   };
 
   const isReviewStage = jobStatus?.status === 'review_ready';
@@ -407,6 +520,7 @@ function App() {
 
         {/* ── Top Header & Integration Badges ── */}
         <header className="text-center mb-12">
+          {/* Integration Badges Row */}
           <div className="flex flex-wrap items-center justify-center gap-3.5 mb-5">
             {/* Gemini Status Badge */}
             <motion.div
@@ -422,51 +536,79 @@ function App() {
               <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
             </motion.div>
 
-            {/* YouTube Channel Badge / Connect Button */}
+            {/* ── YouTube Badge / Connect ── */}
             {youtubeStatus.connected && youtubeStatus.channel ? (
-              <motion.div
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1,   opacity: 1 }}
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
                 className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-slate-900/80 border border-red-500/40 backdrop-blur-md shadow-[0_0_20px_rgba(239,68,68,0.15)]"
               >
-                {youtubeStatus.channel.avatar ? (
-                  <img
-                    src={youtubeStatus.channel.avatar}
-                    alt={youtubeStatus.channel.title}
-                    className="w-5 h-5 rounded-full border border-red-400 object-cover"
-                  />
-                ) : (
-                  <Video className="w-4 h-4 text-red-500" />
-                )}
-                <span className="text-xs sm:text-sm font-bold text-slate-200">
-                  {youtubeStatus.channel.title}
-                </span>
-                <button
-                  onClick={handleDisconnectYoutube}
-                  title="Unlink YouTube Channel"
-                  className="text-slate-400 hover:text-red-400 ml-1 transition-colors cursor-pointer"
-                >
+                {youtubeStatus.channel.avatar
+                  ? <img src={youtubeStatus.channel.avatar} alt={youtubeStatus.channel.title} className="w-5 h-5 rounded-full border border-red-400 object-cover" />
+                  : <Video className="w-4 h-4 text-red-500" />}
+                <span className="text-xs sm:text-sm font-bold text-slate-200">{youtubeStatus.channel.title}</span>
+                <button onClick={handleDisconnectYoutube} title="Unlink YouTube" className="text-slate-400 hover:text-red-400 ml-1 transition-colors cursor-pointer">
                   <X className="w-3.5 h-3.5" />
                 </button>
               </motion.div>
             ) : (
-              <motion.button
-                initial={{ scale: 0.9, opacity: 0 }}
-                animate={{ scale: 1,   opacity: 1 }}
+              <motion.button initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
                 onClick={handleConnectYoutube}
                 className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-600/20 hover:bg-red-600/30 border border-red-500/40 text-red-300 hover:text-white transition-all text-xs sm:text-sm font-bold shadow-[0_0_20px_rgba(239,68,68,0.15)] cursor-pointer"
               >
                 <Video className="w-4 h-4 text-red-500" />
-                <span>Link YouTube Channel</span>
+                <span>Link YouTube</span>
               </motion.button>
             )}
 
-            {/* YouTube Settings Gear Button */}
-            <motion.button
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1,   opacity: 1 }}
+            {/* ── TikTok Badge / Connect ── */}
+            {tiktokStatus.connected && tiktokStatus.account ? (
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-slate-900/80 border border-slate-400/40 backdrop-blur-md shadow-[0_0_20px_rgba(0,0,0,0.4)]"
+              >
+                {tiktokStatus.account.avatar_url
+                  ? <img src={tiktokStatus.account.avatar_url} alt={tiktokStatus.account.display_name} className="w-5 h-5 rounded-full border border-slate-400 object-cover" />
+                  : <Music className="w-4 h-4 text-white" />}
+                <span className="text-xs sm:text-sm font-bold text-slate-200">@{tiktokStatus.account.username || tiktokStatus.account.display_name}</span>
+                <button onClick={handleDisconnectTiktok} title="Unlink TikTok" className="text-slate-400 hover:text-white ml-1 transition-colors cursor-pointer">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </motion.div>
+            ) : (
+              <motion.button initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                onClick={handleConnectTiktok}
+                className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-800/80 hover:bg-slate-700/80 border border-slate-600/60 text-slate-300 hover:text-white transition-all text-xs sm:text-sm font-bold cursor-pointer"
+              >
+                <Music className="w-4 h-4" />
+                <span>Link TikTok</span>
+              </motion.button>
+            )}
+
+            {/* ── Instagram Badge / Connect ── */}
+            {instagramStatus.connected && instagramStatus.account ? (
+              <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-slate-900/80 border border-pink-500/40 backdrop-blur-md shadow-[0_0_20px_rgba(236,72,153,0.2)]"
+              >
+                {instagramStatus.account.avatar
+                  ? <img src={instagramStatus.account.avatar} alt={instagramStatus.account.username} className="w-5 h-5 rounded-full border border-pink-400 object-cover" style={{ borderImage: 'linear-gradient(135deg,#f09433,#bc1888) 1' }} />
+                  : <Camera className="w-4 h-4 text-pink-400" />}
+                <span className="text-xs sm:text-sm font-bold text-slate-200">@{instagramStatus.account.username}</span>
+                <button onClick={handleDisconnectInstagram} title="Unlink Instagram" className="text-slate-400 hover:text-pink-400 ml-1 transition-colors cursor-pointer">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </motion.div>
+            ) : (
+              <motion.button initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                onClick={handleConnectInstagram}
+                className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-orange-600/20 via-pink-600/20 to-purple-600/20 hover:from-orange-600/30 hover:to-purple-600/30 border border-pink-500/40 text-pink-300 hover:text-white transition-all text-xs sm:text-sm font-bold cursor-pointer"
+              >
+                <Camera className="w-4 h-4 text-pink-400" />
+                <span>Link Instagram</span>
+              </motion.button>
+            )}
+
+            {/* Settings gear */}
+            <motion.button initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
               onClick={() => setShowYoutubeConfigModal(true)}
-              title="YouTube OAuth Credentials Settings"
+              title="Platform OAuth Credentials Settings"
               className="p-2 rounded-full bg-slate-900/80 hover:bg-slate-800 border border-slate-700/80 text-slate-400 hover:text-white transition-all cursor-pointer"
             >
               <Settings className="w-4 h-4" />
@@ -1167,8 +1309,8 @@ function App() {
                         <p className="text-xs text-slate-500 font-mono">Optimized for {dest}</p>
                       </div>
 
-                      {/* Card Actions: Download + 1-Click Post to YouTube */}
-                      <div className="mt-5 pt-4 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                      {/* Card Actions: Download + Multi-Platform Publish */}
+                      <div className="mt-5 pt-4 border-t border-slate-800/80 space-y-2.5">
                         <a
                           href={`${BACKEND_URL}/${path}`}
                           download
@@ -1177,12 +1319,30 @@ function App() {
                           <Download className="w-3.5 h-3.5" /> Save
                         </a>
 
-                        <button
-                          onClick={() => handleOpenPublishModal(clip)}
-                          className="px-3.5 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-[0_0_15px_rgba(239,68,68,0.35)] hover:scale-105 transition-all cursor-pointer"
-                        >
-                          <Video className="w-3.5 h-3.5" /> Post to YouTube
-                        </button>
+                        {/* Platform publish buttons */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <button
+                            onClick={() => handleOpenPublishModal(clip, 'youtube')}
+                            className="flex-1 min-w-0 px-2.5 py-1.5 bg-red-600/80 hover:bg-red-500 text-white rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 shadow-[0_0_12px_rgba(239,68,68,0.3)] hover:scale-105 transition-all cursor-pointer"
+                          >
+                            <Video className="w-3 h-3" /> YouTube
+                          </button>
+
+                          <button
+                            onClick={() => handleOpenPublishModal(clip, 'tiktok')}
+                            className="flex-1 min-w-0 px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 hover:scale-105 transition-all cursor-pointer"
+                          >
+                            <Music className="w-3 h-3" /> TikTok
+                          </button>
+
+                          <button
+                            onClick={() => handleOpenPublishModal(clip, 'instagram')}
+                            className="flex-1 min-w-0 px-2.5 py-1.5 text-white rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 hover:scale-105 transition-all cursor-pointer"
+                            style={{ background: 'linear-gradient(135deg,#f09433,#e6683c,#dc2743,#cc2366,#bc1888)' }}
+                          >
+                            <Camera className="w-3 h-3" /> Instagram
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </motion.div>
@@ -1211,10 +1371,7 @@ function App() {
                   </div>
                   Link YouTube Channel
                 </h3>
-                <button
-                  onClick={() => setShowYoutubeConfigModal(false)}
-                  className="text-slate-500 hover:text-white transition-colors cursor-pointer"
-                >
+                <button onClick={() => setShowYoutubeConfigModal(false)} className="text-slate-500 hover:text-white transition-colors cursor-pointer">
                   <X className="w-5 h-5" />
                 </button>
               </div>
@@ -1222,74 +1379,42 @@ function App() {
               <div className="space-y-4 text-xs">
                 <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800/90 space-y-2.5 text-slate-300 leading-relaxed">
                   <div className="flex items-center justify-between">
-                    <p className="font-bold text-indigo-300">Google Cloud Setup (Project 242796880153):</p>
-                    <a
-                      href="https://console.cloud.google.com/apis/credentials?project=242796880153"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-indigo-400 hover:text-indigo-300 font-bold inline-flex items-center gap-1"
-                    >
+                    <p className="font-bold text-indigo-300">Google Cloud Setup:</p>
+                    <a href="https://console.cloud.google.com/apis/credentials?project=242796880153" target="_blank" rel="noopener noreferrer"
+                      className="text-indigo-400 hover:text-indigo-300 font-bold inline-flex items-center gap-1">
                       Open Cloud Console <ExternalLink className="w-3 h-3" />
                     </a>
                   </div>
                   <ol className="list-decimal list-inside space-y-1 text-slate-400">
-                    <li>
-                      <a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com?project=242796880153" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline font-medium">
-                        Enable YouTube Data API v3
-                      </a> in your Google Cloud project.
-                    </li>
-                    <li>Go to <b>Credentials &gt; Create Credentials &gt; OAuth client ID</b>.</li>
-                    <li>Select Application type: <b>Web application</b>.</li>
-                    <li>
-                      Add Authorized redirect URI:{' '}
-                      <code className="bg-slate-900 px-1.5 py-0.5 rounded text-pink-300 font-mono text-[11px]">
-                        {youtubeStatus.redirect_uri || 'http://localhost:8000/api/youtube/callback'}
-                      </code>
-                    </li>
-                    <li>Paste your generated Client ID and Client Secret below:</li>
+                    <li><a href="https://console.cloud.google.com/apis/library/youtube.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline font-medium">Enable YouTube Data API v3</a></li>
+                    <li>Go to <b>Credentials &gt; Create Credentials &gt; OAuth client ID</b></li>
+                    <li>Select Application type: <b>Web application</b></li>
+                    <li>Add redirect URI: <code className="bg-slate-900 px-1.5 py-0.5 rounded text-pink-300 font-mono text-[11px]">{youtubeStatus.redirect_uri}</code></li>
                   </ol>
-
-                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300/90 text-[11px] leading-normal flex items-start gap-2">
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300/90 text-[11px] flex items-start gap-2">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
-                    <span><b>Fix for Error 403 access_denied ("App has not completed verification"):</b> In Google Cloud Console under <a href="https://console.cloud.google.com/apis/credentials/consent?project=242796880153" target="_blank" rel="noopener noreferrer" className="underline font-bold text-amber-200">OAuth consent screen</a>, scroll down to <b>Test users</b> and add your email (e.g. <code>emolyrics250@gmail.com</code>). Then log in. When warned with "Google hasn't verified this app", click <b>Advanced &gt; Go to auto_shorts (unsafe)</b>.</span>
+                    <span><b>Error 403?</b> Add your email as a Test User in the <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" className="underline font-bold">OAuth consent screen</a>, then click <b>Advanced &gt; Go to app (unsafe)</b>.</span>
                   </div>
                 </div>
-
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1.5">OAuth Client ID</label>
-                  <input
-                    type="text"
-                    placeholder="242796880153-xxxxxxxx.apps.googleusercontent.com"
+                  <input type="text" placeholder="242796880153-xxxxxxxx.apps.googleusercontent.com"
                     value={youtubeConfigForm.clientId}
                     onChange={(e) => setYoutubeConfigForm(f => ({ ...f, clientId: e.target.value }))}
-                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-mono"
-                  />
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-mono" />
                 </div>
-
                 <div>
                   <label className="block text-xs font-bold text-slate-300 mb-1.5">OAuth Client Secret</label>
-                  <input
-                    type="password"
-                    placeholder="GOCSPX-xxxxxxxxxxxxxxxx"
+                  <input type="password" placeholder="GOCSPX-xxxxxxxxxxxxxxxx"
                     value={youtubeConfigForm.clientSecret}
                     onChange={(e) => setYoutubeConfigForm(f => ({ ...f, clientSecret: e.target.value }))}
-                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-mono"
-                  />
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-mono" />
                 </div>
-
                 <div className="pt-2 flex gap-3">
-                  <button
-                    onClick={() => setShowYoutubeConfigModal(false)}
-                    className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-all cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={handleSaveYoutubeConfig}
-                    disabled={!youtubeConfigForm.clientId || !youtubeConfigForm.clientSecret}
-                    className="flex-1 py-3 bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition-all shadow-[0_0_20px_rgba(239,68,68,0.3)] cursor-pointer"
-                  >
-                    Save & Authorize
+                  <button onClick={() => setShowYoutubeConfigModal(false)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-all cursor-pointer">Cancel</button>
+                  <button onClick={handleSaveYoutubeConfig} disabled={!youtubeConfigForm.clientId || !youtubeConfigForm.clientSecret}
+                    className="flex-1 py-3 bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition-all shadow-[0_0_20px_rgba(239,68,68,0.3)] cursor-pointer">
+                    Save &amp; Authorize
                   </button>
                 </div>
               </div>
@@ -1298,7 +1423,145 @@ function App() {
         )}
       </AnimatePresence>
 
-      {/* ── MODAL: 1-CLICK POST TO YOUTUBE SHORTS ── */}
+      {/* ── MODAL: TIKTOK CREDENTIALS SETUP ── */}
+      <AnimatePresence>
+        {showTiktokConfigModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-slate-700 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-[0_0_60px_rgba(0,0,0,0.8)] relative"
+            >
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-xl font-bold text-white flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-slate-700 border border-slate-600 flex items-center justify-center">
+                    <Music className="w-4 h-4 text-white" />
+                  </div>
+                  Link TikTok Account
+                </h3>
+                <button onClick={() => setShowTiktokConfigModal(false)} className="text-slate-500 hover:text-white transition-colors cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="space-y-4 text-xs">
+                <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800/90 space-y-2.5 text-slate-300 leading-relaxed">
+                  <div className="flex items-center justify-between">
+                    <p className="font-bold text-indigo-300">TikTok Developer Portal Setup:</p>
+                    <a href="https://developers.tiktok.com/" target="_blank" rel="noopener noreferrer"
+                      className="text-indigo-400 hover:text-indigo-300 font-bold inline-flex items-center gap-1">
+                      Open Portal <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-slate-400">
+                    <li>Create a new app at <b>developers.tiktok.com &gt; Manage apps &gt; Connect an app</b></li>
+                    <li>Under <b>Products</b> add <b>Content Posting API</b> and <b>Login Kit</b></li>
+                    <li>Add Redirect URI: <code className="bg-slate-900 px-1.5 py-0.5 rounded text-pink-300 font-mono text-[11px]">{tiktokStatus.redirect_uri}</code></li>
+                    <li>Copy your <b>Client Key</b> (App Key) and <b>Client Secret</b> below:</li>
+                  </ol>
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300/90 text-[11px] flex items-start gap-2">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
+                    <span><b>Note:</b> In Sandbox mode, only added test users can authorize. Submit your app for review to enable all TikTok accounts.</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">App Key (Client Key)</label>
+                  <input type="text" placeholder="xxxxxxxxxxxxxxxxxxxxxxxx"
+                    value={tiktokConfigForm.appKey}
+                    onChange={(e) => setTiktokConfigForm(f => ({ ...f, appKey: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-slate-400 font-mono" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">App Secret (Client Secret)</label>
+                  <input type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    value={tiktokConfigForm.appSecret}
+                    onChange={(e) => setTiktokConfigForm(f => ({ ...f, appSecret: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-slate-400 font-mono" />
+                </div>
+                <div className="pt-2 flex gap-3">
+                  <button onClick={() => setShowTiktokConfigModal(false)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-all cursor-pointer">Cancel</button>
+                  <button onClick={handleSaveTiktokConfig} disabled={!tiktokConfigForm.appKey || !tiktokConfigForm.appSecret}
+                    className="flex-1 py-3 bg-slate-600 hover:bg-slate-500 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition-all cursor-pointer">
+                    Save &amp; Authorize
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── MODAL: INSTAGRAM CREDENTIALS SETUP ── */}
+      <AnimatePresence>
+        {showInstagramConfigModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-slate-900 border border-pink-500/30 rounded-3xl p-6 sm:p-8 max-w-lg w-full shadow-[0_0_60px_rgba(236,72,153,0.1)] relative"
+            >
+              <div className="flex items-center justify-between mb-5">
+                <h3 className="text-xl font-bold text-white flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'linear-gradient(135deg,#f09433,#bc1888)' }}>
+                    <Camera className="w-4 h-4 text-white" />
+                  </div>
+                  Link Instagram Account
+                </h3>
+                <button onClick={() => setShowInstagramConfigModal(false)} className="text-slate-500 hover:text-white transition-colors cursor-pointer">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="space-y-4 text-xs">
+                <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800/90 space-y-2.5 text-slate-300 leading-relaxed">
+                  <div className="flex items-center justify-between">
+                    <p className="font-bold text-pink-300">Meta Developer Portal Setup:</p>
+                    <a href="https://developers.facebook.com/" target="_blank" rel="noopener noreferrer"
+                      className="text-pink-400 hover:text-pink-300 font-bold inline-flex items-center gap-1">
+                      Open Portal <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-slate-400">
+                    <li>Create a Meta App at <b>developers.facebook.com &gt; My Apps &gt; Create App</b></li>
+                    <li>Add the <b>Instagram</b> product to your app</li>
+                    <li>Link an <b>Instagram Business or Creator</b> account to a Facebook Page</li>
+                    <li>Under <b>Facebook Login &gt; Settings</b> add redirect URI: <code className="bg-slate-900 px-1.5 py-0.5 rounded text-pink-300 font-mono text-[11px]">{instagramStatus.redirect_uri}</code></li>
+                    <li>Copy your <b>App ID</b> and <b>App Secret</b> below:</li>
+                  </ol>
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300/90 text-[11px] flex items-start gap-2">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
+                    <span><b>Important:</b> Instagram Reels publishing via API requires a <b>Business or Creator</b> account linked to a Facebook Page. Personal accounts are not supported.</span>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">Meta App ID</label>
+                  <input type="text" placeholder="123456789012345"
+                    value={instagramConfigForm.appId}
+                    onChange={(e) => setInstagramConfigForm(f => ({ ...f, appId: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-pink-500 font-mono" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">Meta App Secret</label>
+                  <input type="password" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    value={instagramConfigForm.appSecret}
+                    onChange={(e) => setInstagramConfigForm(f => ({ ...f, appSecret: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-pink-500 font-mono" />
+                </div>
+                <div className="pt-2 flex gap-3">
+                  <button onClick={() => setShowInstagramConfigModal(false)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition-all cursor-pointer">Cancel</button>
+                  <button onClick={handleSaveInstagramConfig} disabled={!instagramConfigForm.appId || !instagramConfigForm.appSecret}
+                    className="flex-1 py-3 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition-all cursor-pointer"
+                    style={{ background: 'linear-gradient(135deg,#f09433,#bc1888)' }}>
+                    Save &amp; Authorize
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ── MODAL: MULTI-PLATFORM PUBLISH ── */}
       <AnimatePresence>
         {publishingClip && (
           <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
@@ -1306,57 +1569,56 @@ function App() {
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-slate-900 border border-red-500/30 rounded-3xl p-6 sm:p-8 max-w-xl w-full shadow-[0_0_60px_rgba(239,68,68,0.15)] relative max-h-[90vh] overflow-y-auto"
+              className="bg-slate-900 border border-slate-700/60 rounded-3xl p-6 sm:p-8 max-w-xl w-full shadow-[0_0_60px_rgba(0,0,0,0.6)] relative max-h-[92vh] overflow-y-auto"
             >
               {/* Header */}
               <div className="flex items-center justify-between mb-5">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-500">
-                    <Video className="w-5 h-5" />
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+                    style={publishPlatform === 'instagram'
+                      ? { background: 'linear-gradient(135deg,#f09433,#bc1888)' }
+                      : publishPlatform === 'tiktok'
+                        ? { background: '#1a1a1a', border: '1px solid #555' }
+                        : { background: 'rgba(239,68,68,0.2)', border: '1px solid rgba(239,68,68,0.4)' }
+                    }>
+                    {publishPlatform === 'instagram' ? <Camera className="w-5 h-5 text-white" />
+                      : publishPlatform === 'tiktok' ? <Music className="w-5 h-5 text-white" />
+                      : <Video className="w-5 h-5 text-red-400" />}
                   </div>
                   <div>
-                    <h3 className="text-xl font-bold text-white">Post to YouTube Shorts</h3>
-                    <p className="text-xs text-slate-400">Publish high-reach title & viral description directly</p>
+                    <h3 className="text-xl font-bold text-white">
+                      {publishPlatform === 'youtube' ? 'Post to YouTube Shorts'
+                        : publishPlatform === 'tiktok' ? 'Post to TikTok'
+                        : 'Post to Instagram Reels'}
+                    </h3>
+                    <p className="text-xs text-slate-400">Publish this short with AI-generated captions</p>
                   </div>
                 </div>
-                <button
-                  onClick={() => setPublishingClip(null)}
-                  className="text-slate-500 hover:text-white transition-colors cursor-pointer"
-                >
+                <button onClick={() => setPublishingClip(null)} className="text-slate-500 hover:text-white transition-colors cursor-pointer">
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Connected Channel Display */}
-              {youtubeStatus.connected && youtubeStatus.channel ? (
-                <div className="flex items-center gap-3 p-3 bg-slate-950/80 border border-slate-800 rounded-2xl mb-5">
-                  {youtubeStatus.channel.avatar ? (
-                    <img src={youtubeStatus.channel.avatar} className="w-9 h-9 rounded-full border border-red-400 object-cover" />
-                  ) : (
-                    <Video className="w-6 h-6 text-red-500" />
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Publishing to Channel:</span>
-                    <p className="text-sm font-bold text-white truncate">{youtubeStatus.channel.title}</p>
-                  </div>
-                  <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/30">
-                    Connected
-                  </span>
-                </div>
-              ) : (
-                <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl mb-5 text-xs text-amber-300 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Connect your YouTube channel before posting.</span>
-                  </div>
+              {/* Platform Selector */}
+              <div className="grid grid-cols-3 gap-2 mb-5">
+                {[
+                  { id: 'youtube',   label: 'YouTube',   Icon: Video,   color: 'border-red-500 bg-red-500/15 text-red-300',   inactive: 'border-slate-700 bg-slate-800/50 text-slate-400', connected: youtubeStatus.connected },
+                  { id: 'tiktok',    label: 'TikTok',    Icon: Music,   color: 'border-slate-400 bg-slate-700 text-white',     inactive: 'border-slate-700 bg-slate-800/50 text-slate-400', connected: tiktokStatus.connected },
+                  { id: 'instagram', label: 'Instagram', Icon: Camera,  color: 'border-pink-500 bg-pink-500/15 text-pink-300', inactive: 'border-slate-700 bg-slate-800/50 text-slate-400', connected: instagramStatus.connected },
+                ].map(({ id, label, Icon, color, inactive, connected }) => (
                   <button
-                    onClick={() => { setPublishingClip(null); handleConnectYoutube(); }}
-                    className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-xs cursor-pointer shrink-0"
+                    key={id}
+                    onClick={() => { setPublishPlatform(id); setPublishResult(null); setPublishError(''); }}
+                    className={`py-2.5 px-3 rounded-xl border text-center text-xs font-bold flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
+                      publishPlatform === id ? color : inactive
+                    }`}
                   >
-                    Connect
+                    <Icon className="w-4 h-4" />
+                    {label}
+                    {connected && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />}
                   </button>
-                </div>
-              )}
+                ))}
+              </div>
 
               {/* SUCCESS STATE */}
               {publishResult ? (
@@ -1364,90 +1626,184 @@ function App() {
                   <div className="w-14 h-14 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center mx-auto shadow-[0_0_30px_rgba(16,185,129,0.3)]">
                     <CheckCircle className="w-8 h-8" />
                   </div>
-                  <h4 className="text-2xl font-black text-white">Short Published Successfully!</h4>
+                  <h4 className="text-2xl font-black text-white">Published Successfully!</h4>
                   <p className="text-xs text-slate-300 max-w-sm mx-auto">
-                    Your video is live on YouTube. Click below to view the Short in your browser.
+                    Your video is live on {publishPlatform === 'youtube' ? 'YouTube Shorts' : publishPlatform === 'tiktok' ? 'TikTok' : 'Instagram Reels'}.
                   </p>
-
                   <div className="pt-2 flex flex-col sm:flex-row gap-3 justify-center">
-                    <a
-                      href={publishResult.youtube_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(239,68,68,0.4)]"
-                    >
-                      <ExternalLink className="w-4 h-4" /> Open on YouTube Shorts
-                    </a>
-                    <button
-                      onClick={() => setPublishingClip(null)}
-                      className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl"
-                    >
+                    {publishResult.url && (
+                      <a href={publishResult.url} target="_blank" rel="noopener noreferrer"
+                        className="px-6 py-3 text-white font-bold text-xs rounded-xl flex items-center justify-center gap-2"
+                        style={publishPlatform === 'instagram'
+                          ? { background: 'linear-gradient(135deg,#f09433,#bc1888)' }
+                          : publishPlatform === 'tiktok'
+                            ? { background: '#1a1a1a', border: '1px solid #555' }
+                            : { background: '#dc2626', boxShadow: '0 0 20px rgba(239,68,68,0.4)' }
+                        }>
+                        <ExternalLink className="w-4 h-4" />
+                        View {publishPlatform === 'youtube' ? 'on YouTube' : publishPlatform === 'tiktok' ? 'on TikTok' : 'on Instagram'}
+                      </a>
+                    )}
+                    <button onClick={() => setPublishingClip(null)}
+                      className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs rounded-xl cursor-pointer">
                       Done
                     </button>
                   </div>
                 </div>
               ) : (
-                /* FORM INPUTS */
                 <div className="space-y-4 text-xs">
-                  {/* Title */}
-                  <div>
-                    <div className="flex justify-between items-center mb-1">
-                      <label className="font-bold text-slate-300">Video Title (Auto-appends #Shorts):</label>
-                      <span className={`font-mono text-[11px] ${publishForm.title.length > 95 ? 'text-amber-400' : 'text-slate-500'}`}>
-                        {publishForm.title.length}/100
-                      </span>
-                    </div>
-                    <input
-                      type="text"
-                      maxLength={100}
-                      value={publishForm.title}
-                      onChange={(e) => setPublishForm(f => ({ ...f, title: e.target.value }))}
-                      className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-medium"
-                    />
-                  </div>
+                  {/* Account status banner */}
+                  {publishPlatform === 'youtube' && (
+                    youtubeStatus.connected && youtubeStatus.channel ? (
+                      <div className="flex items-center gap-3 p-3 bg-slate-950/80 border border-slate-800 rounded-2xl">
+                        {youtubeStatus.channel.avatar && <img src={youtubeStatus.channel.avatar} className="w-8 h-8 rounded-full border border-red-400 object-cover" />}
+                        <div className="flex-1 min-w-0">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Publishing to:</span>
+                          <p className="text-sm font-bold text-white truncate">{youtubeStatus.channel.title}</p>
+                        </div>
+                        <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/30">Connected</span>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-xs text-amber-300 flex items-center justify-between">
+                        <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4 text-amber-400" /><span>Connect YouTube first.</span></div>
+                        <button onClick={() => { setPublishingClip(null); handleConnectYoutube(); }}
+                          className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg font-bold text-xs cursor-pointer">Connect</button>
+                      </div>
+                    )
+                  )}
 
-                  {/* Description */}
-                  <div>
-                    <label className="block font-bold text-slate-300 mb-1">Description (AI Caption & Call-to-Action):</label>
-                    <textarea
-                      rows={4}
-                      value={publishForm.description}
-                      onChange={(e) => setPublishForm(f => ({ ...f, description: e.target.value }))}
-                      className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-red-500 font-normal leading-relaxed"
-                    />
-                  </div>
+                  {publishPlatform === 'tiktok' && (
+                    tiktokStatus.connected && tiktokStatus.account ? (
+                      <div className="flex items-center gap-3 p-3 bg-slate-950/80 border border-slate-700 rounded-2xl">
+                        {tiktokStatus.account.avatar_url && <img src={tiktokStatus.account.avatar_url} className="w-8 h-8 rounded-full border border-slate-500 object-cover" />}
+                        <div className="flex-1 min-w-0">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Publishing as:</span>
+                          <p className="text-sm font-bold text-white truncate">@{tiktokStatus.account.username || tiktokStatus.account.display_name}</p>
+                        </div>
+                        <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/30">Connected</span>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-xs text-amber-300 flex items-center justify-between">
+                        <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4 text-amber-400" /><span>Connect TikTok first.</span></div>
+                        <button onClick={() => { setPublishingClip(null); handleConnectTiktok(); }}
+                          className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-bold text-xs cursor-pointer">Connect</button>
+                      </div>
+                    )
+                  )}
 
-                  {/* Tags */}
-                  <div>
-                    <label className="block font-bold text-slate-300 mb-1">Tags (Comma-separated):</label>
-                    <input
-                      type="text"
-                      value={publishForm.tags}
-                      onChange={(e) => setPublishForm(f => ({ ...f, tags: e.target.value }))}
-                      className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-red-500 font-mono"
-                    />
-                  </div>
+                  {publishPlatform === 'instagram' && (
+                    instagramStatus.connected && instagramStatus.account ? (
+                      <div className="flex items-center gap-3 p-3 bg-slate-950/80 border border-pink-500/20 rounded-2xl">
+                        {instagramStatus.account.avatar && <img src={instagramStatus.account.avatar} className="w-8 h-8 rounded-full object-cover" style={{ border: '2px solid #bc1888' }} />}
+                        <div className="flex-1 min-w-0">
+                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Publishing as:</span>
+                          <p className="text-sm font-bold text-white truncate">@{instagramStatus.account.username}</p>
+                        </div>
+                        <span className="text-[10px] uppercase font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/30">Connected</span>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl text-xs text-amber-300 flex items-center justify-between">
+                        <div className="flex items-center gap-2"><AlertCircle className="w-4 h-4 text-amber-400" /><span>Connect Instagram first.</span></div>
+                        <button onClick={() => { setPublishingClip(null); handleConnectInstagram(); }}
+                          className="px-3 py-1.5 text-white rounded-lg font-bold text-xs cursor-pointer" style={{ background: 'linear-gradient(135deg,#f09433,#bc1888)' }}>Connect</button>
+                      </div>
+                    )
+                  )}
 
-                  {/* Privacy Status */}
-                  <div>
-                    <label className="block font-bold text-slate-300 mb-1">Privacy Status:</label>
-                    <div className="grid grid-cols-3 gap-2.5">
-                      {['public', 'unlisted', 'private'].map(p => (
-                        <button
-                          key={p}
-                          type="button"
-                          onClick={() => setPublishForm(f => ({ ...f, privacyStatus: p }))}
-                          className={`py-2 px-3 rounded-xl border text-center capitalize font-semibold transition-all cursor-pointer ${
-                            publishForm.privacyStatus === p
-                              ? 'bg-red-500/20 border-red-500 text-white'
-                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
-                          }`}
-                        >
-                          {p}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  {/* ── YouTube-specific fields ── */}
+                  {publishPlatform === 'youtube' && (
+                    <>
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="font-bold text-slate-300">Video Title:</label>
+                          <span className={`font-mono text-[11px] ${publishForm.title.length > 95 ? 'text-amber-400' : 'text-slate-500'}`}>{publishForm.title.length}/100</span>
+                        </div>
+                        <input type="text" maxLength={100} value={publishForm.title}
+                          onChange={(e) => setPublishForm(f => ({ ...f, title: e.target.value }))}
+                          className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-red-500 font-medium" />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-300 mb-1">Description (AI Caption):</label>
+                        <textarea rows={4} value={publishForm.description}
+                          onChange={(e) => setPublishForm(f => ({ ...f, description: e.target.value }))}
+                          className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-red-500 leading-relaxed" />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-300 mb-1">Tags (comma-separated):</label>
+                        <input type="text" value={publishForm.tags}
+                          onChange={(e) => setPublishForm(f => ({ ...f, tags: e.target.value }))}
+                          className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-red-500 font-mono" />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-300 mb-1">Privacy:</label>
+                        <div className="grid grid-cols-3 gap-2">
+                          {['public', 'unlisted', 'private'].map(p => (
+                            <button key={p} type="button" onClick={() => setPublishForm(f => ({ ...f, privacyStatus: p }))}
+                              className={`py-2 px-3 rounded-xl border text-center capitalize font-semibold transition-all cursor-pointer ${
+                                publishForm.privacyStatus === p ? 'bg-red-500/20 border-red-500 text-white' : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+                              }`}>{p}</button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* ── TikTok-specific fields ── */}
+                  {publishPlatform === 'tiktok' && (
+                    <>
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="font-bold text-slate-300">Title / Hook (shown as caption start):</label>
+                          <span className="font-mono text-[11px] text-slate-500">{publishForm.title.replace(' #Shorts', '').length}/150</span>
+                        </div>
+                        <input type="text" maxLength={150} value={publishForm.title.replace(' #Shorts', '')}
+                          onChange={(e) => setPublishForm(f => ({ ...f, title: e.target.value }))}
+                          className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-slate-400 font-medium" />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-300 mb-1">Caption &amp; Hashtags (TikTok description):</label>
+                        <textarea rows={4} value={publishForm.caption}
+                          onChange={(e) => setPublishForm(f => ({ ...f, caption: e.target.value }))}
+                          className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-slate-400 leading-relaxed" />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-300 mb-1">Privacy Level:</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {[
+                            { id: 'PUBLIC_TO_EVERYONE', label: 'Public' },
+                            { id: 'FOLLOWER_OF_CREATOR', label: 'Followers' },
+                            { id: 'MUTUAL_FOLLOW_FRIENDS', label: 'Friends' },
+                            { id: 'SELF_ONLY', label: 'Private' },
+                          ].map(p => (
+                            <button key={p.id} type="button" onClick={() => setPublishForm(f => ({ ...f, tiktokPrivacy: p.id }))}
+                              className={`py-2 px-3 rounded-xl border text-center font-semibold transition-all cursor-pointer ${
+                                publishForm.tiktokPrivacy === p.id ? 'bg-slate-600 border-slate-400 text-white' : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
+                              }`}>{p.label}</button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {/* ── Instagram-specific fields ── */}
+                  {publishPlatform === 'instagram' && (
+                    <>
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <label className="font-bold text-slate-300">Caption &amp; Hashtags:</label>
+                          <span className={`font-mono text-[11px] ${publishForm.caption.length > 2100 ? 'text-amber-400' : 'text-slate-500'}`}>{publishForm.caption.length}/2200</span>
+                        </div>
+                        <textarea rows={5} maxLength={2200} value={publishForm.caption}
+                          onChange={(e) => setPublishForm(f => ({ ...f, caption: e.target.value }))}
+                          className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-xs text-slate-200 focus:outline-none leading-relaxed"
+                          style={{ focusBorderColor: '#bc1888' }} />
+                      </div>
+                      <div className="p-2.5 bg-blue-500/10 border border-blue-500/20 rounded-xl text-blue-300/90 text-[11px] flex items-start gap-2">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-blue-400" />
+                        <span>Instagram Reels require a publicly accessible video URL. The backend must be reachable from Meta's servers. For local development, use a tunnel (e.g. ngrok) and set <code className="bg-slate-900 px-1 rounded">BACKEND_PUBLIC_URL</code> in your .env file.</span>
+                      </div>
+                    </>
+                  )}
 
                   {publishError && (
                     <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-xs">
@@ -1458,19 +1814,24 @@ function App() {
                   {/* Submit Button */}
                   <div className="pt-2">
                     <button
-                      onClick={handlePublishToYoutube}
-                      disabled={isPublishing || !youtubeStatus.connected}
-                      className="w-full py-3.5 bg-gradient-to-r from-red-600 to-pink-600 hover:shadow-[0_0_30px_rgba(239,68,68,0.4)] disabled:opacity-50 text-white font-bold rounded-xl text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
-                    >
+                      onClick={handlePublishSubmit}
+                      disabled={isPublishing
+                        || (publishPlatform === 'youtube' && !youtubeStatus.connected)
+                        || (publishPlatform === 'tiktok' && !tiktokStatus.connected)
+                        || (publishPlatform === 'instagram' && !instagramStatus.connected)
+                      }
+                      className="w-full py-3.5 disabled:opacity-50 text-white font-bold rounded-xl text-sm flex items-center justify-center gap-2 transition-all cursor-pointer"
+                      style={publishPlatform === 'instagram'
+                        ? { background: 'linear-gradient(135deg,#f09433,#bc1888)', boxShadow: '0 0 25px rgba(188,24,136,0.4)' }
+                        : publishPlatform === 'tiktok'
+                          ? { background: '#1a1a1a', border: '1px solid #555' }
+                          : { background: 'linear-gradient(to right, #dc2626, #db2777)', boxShadow: '0 0 25px rgba(239,68,68,0.4)' }
+                      }>
                       {isPublishing ? (
-                        <>
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          Uploading to YouTube...
-                        </>
+                        <><RefreshCw className="w-4 h-4 animate-spin" /> Uploading...</>
                       ) : (
-                        <>
-                          <Send className="w-4 h-4" />
-                          Post Short Now
+                        <><Send className="w-4 h-4" />
+                          Post to {publishPlatform === 'youtube' ? 'YouTube Shorts' : publishPlatform === 'tiktok' ? 'TikTok' : 'Instagram Reels'}
                         </>
                       )}
                     </button>
